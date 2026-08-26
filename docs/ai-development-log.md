@@ -170,3 +170,148 @@
 ### Следующий этап
 
 Этап 3 — каркас frontend и backend ([`llm/03-project-scaffold.md`](../llm/03-project-scaffold.md)).
+
+## Этап 3. Каркас frontend и backend
+
+- Дата: 2026-08-26
+- Роль агента: senior full-stack engineer
+- Промпт этапа: [`llm/03-project-scaffold.md`](../llm/03-project-scaffold.md)
+
+### Задача
+
+Создать минимальный рабочий каркас двух независимых приложений — `frontend/` и
+`backend/` — с базовыми проверками качества и воспроизводимым локальным запуском.
+Продуктовые use cases не реализуются.
+
+### Подход
+
+1. Прочитаны `llm/00-project-overview.md`, `docs/product-requirements.md`, `openapi.yaml`,
+   `docs/api.md`, ADR 0001 и 0002, а также промпты этапов 4 и 5, чтобы не залезть
+   в их зону ответственности.
+2. Изучено окружение: Node **20.6.1**, npm **9.8.1**, других менеджеров пакетов нет.
+   Версии зависимостей подобраны под этот runtime: Vite 6 (Vite 7 требует Node 20.19+),
+   Vitest 3, React 18, NestJS 11, Prisma 6, TypeScript 5.6.
+3. Корневой `package.json` не тронут как источник workspace: поля `workspaces` нет,
+   у каждого приложения свой `package.json` и свой lockfile (ADR 0001).
+4. Контракт закреплен в коде каркаса там, где умолчания фреймворка ему противоречат:
+   глобальный префикс `/api/v1`, `422` вместо `400` у `ValidationPipe`,
+   `forbidNonWhitelisted` под `additionalProperties: false`, единый формат ошибки
+   `application/problem+json`, обязательный `X-Request-Id`.
+5. Слои frontend созданы только там, где есть реальный код. `features/` и `entities/`
+   содержат описание правил слоя, а не пустые барrel-модули: промпт прямо запрещает
+   многоуровневую абстракцию без использования.
+6. Заготовки backend-модулей взяты строго из раздела 3 overview и зарегистрированы
+   в `AppModule` без контроллеров и провайдеров.
+
+### Созданные и измененные файлы
+
+- `frontend/` (создан): `package.json`, `package-lock.json`, `tsconfig.json`,
+  `vite.config.ts`, `eslint.config.js`, `.prettierrc.json`, `.prettierignore`,
+  `.gitignore`, `.env.example`, `README.md`, `index.html`,
+  `src/main.tsx`, `src/app/{App.tsx,AppLayout.tsx,router.tsx,providers/*,styles/global.css}`,
+  `src/pages/{home,not-found}/*`, `src/shared/api/{client.ts,generated/README.md}`,
+  `src/shared/config/{env.ts,env.test.ts}`, `src/{features,entities}/README.md`,
+  `src/shared/ui/README.md`, `tests/{setup.ts,app.smoke.test.tsx,router.test.tsx}`.
+- `backend/` (создан): `package.json`, `package-lock.json`, `tsconfig.json`,
+  `tsconfig.build.json`, `nest-cli.json`, `jest.config.js`, `eslint.config.mjs`,
+  `.prettierrc.json`, `.prettierignore`, `.gitignore`, `.env.example`, `README.md`,
+  `prisma/schema.prisma`, `src/{main.ts,bootstrap.ts,app.module.ts}`,
+  `src/common/{contract.ts,contract.spec.ts}`,
+  `src/common/config/{env.schema.ts,env.schema.spec.ts,logging.ts}`,
+  `src/common/errors/contract.exception.ts`,
+  `src/common/filters/contract-exception.filter.ts`,
+  `src/common/middleware/request-id.middleware.ts`,
+  `src/common/validation/{validation.pipe.ts,validation.pipe.spec.ts}`,
+  `src/prisma/{prisma.module.ts,prisma.service.ts}`,
+  `src/health/{health.module.ts,health.controller.ts,health.service.ts,health.service.spec.ts}`,
+  `src/{calendars,availability,slots,bookings,owner,messaging,notifications}/*.module.ts`,
+  `test/{setup-env.ts,health.e2e-spec.ts}`.
+- `README.md` (переписан: локальный запуск без Docker, порты, проверки, ограничения MVP).
+- `.gitignore` (обновлен: `.env.*` с исключением `.env.example`, `*.tsbuildinfo`, `build/`, `.vite/`).
+- `docs/ai-development-log.md` (обновлен).
+
+### Ключевые принятые решения
+
+- Ожидаемая версия Node зафиксирована как `>=20.6.0` в `engines` обоих проектов;
+  проверено на 20.6.1. Vite 7 и ESLint-совместимость с Node 20.19+ сознательно не берутся.
+- Кодогенерация frontend: `openapi-typescript` (типы) + `openapi-fetch` (транспорт).
+  Результат в `src/shared/api/generated/` **не коммитится**: генерация детерминирована,
+  не требует сети и запускается `pre*`-скриптами перед `dev`, `typecheck`, `test`, `build`.
+  Решение зафиксировано в корневом README и в README frontend.
+- Prisma Client генерируется `postinstall` и живет в `node_modules`; `schema.prisma`
+  содержит только `generator` и `datasource`. Отдельный пакет `pg` не добавлен:
+  Prisma работает через собственный движок запросов.
+- Соединение Prisma ленивое: `$connect` не вызывается в `onModuleInit`, поэтому backend
+  поднимается без PostgreSQL и честно сообщает `503` на `/health` и `/health/ready`.
+- Маршрутизация frontend — hash routing (`createHashRouter`) сразу: GitHub Pages
+  не дает server-side fallback, а management token живет во fragment (правило M-7).
+- Настройка приложения вынесена в `backend/src/bootstrap.ts` и переиспользуется
+  в `main.ts` и e2e-тестах: тесты проверяют ровно ту конфигурацию, что уходит в production.
+- Валидация окружения на обеих сторонах — zod. Backend валидирует дважды:
+  в `main.ts` до создания приложения (быстрое падение) и в `ConfigModule.forRoot`.
+- Обращение к маршруту вне контракта отдает `404` с телом `Error` и кодом
+  `MALFORMED_REQUEST`: универсального «не найдено» в закрытом enum контракта нет,
+  а такой запрос по смыслу неразбираем. Решение помечено комментарием в фильтре.
+- Lint у обоих проектов запускается с `--max-warnings=0`, backend — с типизированными
+  правилами `typescript-eslint`.
+
+### Выполненные проверки
+
+Runtime: Node **v20.6.1**, npm **9.8.1**.
+
+```bash
+cd frontend && npm install && npm run lint && npm run typecheck && npm test -- --run && npm run build
+cd backend  && npm install && npm run lint && npm run typecheck && npm test && npm run build
+```
+
+- frontend: lint — 0 проблем; typecheck — 0 ошибок; Vitest — 7 тестов в 3 файлах,
+  все зеленые; build — `dist/` собран (293.92 kB / 89.36 kB gzip).
+- backend: lint — 0 проблем; typecheck — 0 ошибок; Jest — 20 тестов в 5 файлах,
+  все зеленые; `nest build` — `dist/` собран.
+- Кодогенерация: `cd frontend && npm run api:generate` воспроизводимо создает
+  `src/shared/api/generated/schema.d.ts` (openapi-typescript 7.13.0) из текущего
+  `../openapi.yaml`; типизированный клиент собирается и проверяется тестом.
+- Ручная проверка запуска backend (`node dist/main.js`, `PORT=3111`):
+  `GET /api/v1/health/live` → `200` с `HealthStatus`;
+  `GET /api/v1/health` → `503` (PostgreSQL не поднят) — ожидаемая ветка контракта;
+  `GET /api/v1/nope` → `404` с `Content-Type: application/problem+json`;
+  во всех ответах присутствует `X-Request-Id`, заголовка `X-Powered-By` нет.
+- Ручная проверка frontend (`npm start`, порт 4199): `index.html` и ассеты отдаются,
+  стартовая страница нейтральная.
+- Проверено отсутствие секретов и артефактов сборки в индексе Git: `dist/`, `coverage/`,
+  `node_modules/`, `.env*` (кроме `.env.example`) и сгенерированный API-клиент игнорируются.
+
+### Обнаруженные риски
+
+- Node 20.6.1 в окружении ниже, чем `engines` части dev-зависимостей
+  (ESLint 9 и typescript-eslint требуют `^20.9.0`), — npm выдает предупреждения
+  `EBADENGINE`. Фактически инструменты работают, проверки зеленые, но на этапе CI
+  корректнее закрепить Node 20.19+ или 22 LTS и снять расхождение.
+- `npm audit` в `backend/` показывает 3 high-уязвимости в транзитивной зависимости
+  `deepmerge-ts` через `@prisma/config` (dev-зависимость `prisma`, в runtime не попадает).
+  Обновление до Prisma 7 отложено: на этапе 5 проектируется схема, менять мажор
+  одновременно с этим рискованно. Вопрос вынесен на этап 11 (CI) как обязательный.
+- Проверка базы в `/health/ready` пока формальная: `PrismaService.isReachable()`
+  выполняет `SELECT 1`, но моделей и миграций нет. Настоящая проверка появится на этапе 5;
+  до тех пор `503` без базы — нормальное состояние каркаса, что легко принять за поломку.
+- Соответствие ответов backend схемам контракта проверяется только вручную и по
+  типам, написанным по контракту руками (`src/common/contract.ts`). Автоматические
+  контрактные тесты запланированы на этап 9; до них возможен дрейф.
+- Решение не коммитить сгенерированный клиент делает `npm ci` обязательным перед
+  любой сборкой frontend и требует, чтобы `openapi.yaml` всегда лежал на один уровень
+  выше. Для деплоя frontend отдельно от репозитория это ограничение нужно учесть.
+
+### Осознанные отклонения и уточнения относительно промпта
+
+- `features/` и `entities/` не наполнены кодом: промпт требует подготовить слои,
+  но одновременно запрещает пустую многоуровневую абстракцию. Компромисс — каталоги
+  с описанием правил слоя без барrel-модулей и оберток.
+- Кроме `GET /health` реализованы `/health/live` и `/health/ready`: они уже есть
+  в контракте (этап 2, правило N-18), и делать вид, что их нет, значит расходиться с ним.
+- В каркас добавлены глобальный фильтр ошибок и middleware `X-Request-Id`. Формально
+  это больше, чем «пустой скелет», но без них любая ошибка каркаса нарушала бы контракт
+  с первого запроса; бизнес-логики они не содержат.
+
+### Следующий этап
+
+Этап 4 — frontend на mock API ([`llm/04-frontend-mocks.md`](../llm/04-frontend-mocks.md)).

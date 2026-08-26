@@ -1,0 +1,15 @@
+// Схема данных сервиса «Запись на звонок».
+//
+// Этап 3 — только каркас: подключение Prisma и PostgreSQL без моделей.
+// Модели `Calendar`, `AvailabilityWindow`, `Booking`, `SlotReservation`,
+// `OutboxEvent` и `NotificationLog`, их индексы и ограничения проектируются
+// на этапе 5 (`llm/05-backend-core.md`).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
