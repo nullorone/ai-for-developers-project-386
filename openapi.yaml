@@ -1,0 +1,2259 @@
+openapi: 3.1.0
+
+info:
+  title: Booking Call API
+  version: 1.0.0
+  summary: REST API сервиса «Запись на звонок» (MVP)
+  description: |
+    Контракт сервиса «Запись на звонок»: владелец публикует интервалы доступности,
+    гость бронирует свободный 30-минутный слот, отменяет его по защищенной ссылке,
+    владелец переносит встречу на другой свободный слот.
+
+    Этот документ — единственный источник истины для API (Design First, ADR 0002).
+    Реализация backend и клиент frontend обязаны соответствовать ему; контракт не
+    выводится из декораторов NestJS.
+
+    ## Инварианты контракта
+
+    * Все моменты времени — RFC 3339 в UTC с суффиксом `Z`, точность до секунд
+      (правило T-1). Смещения, отличные от `Z`, отклоняются как ошибка валидации.
+    * Границы слотов, бронирований и доступности имеют минуты `00` или `30`
+      и нулевые секунды (правила A-3, T-3).
+    * Интервалы времени — полуинтервалы `[startsAt, endsAt)` (правило T-4).
+    * Длительность слота фиксирована: 30 минут (правило A-2). Клиент передает
+      только момент начала; конец вычисляет сервер (правила B-2, R-2).
+    * В системе один seed-календарь и один владелец (правило A-1). Аутентификации
+      нет, owner-эндпоинты публичны — осознанное учебное ограничение (ADR 0001).
+    * Единственный секрет продукта — management token гостя. Он передается только
+      в заголовке `X-Booking-Token` и никогда не появляется в path или query
+      (правило M-6).
+    * Все ошибки имеют единый формат [`Error`](#/components/schemas/Error)
+      со стабильным машинным полем `code`.
+    * Все DTO закрыты от неожиданных свойств (`additionalProperties: false`).
+    * Пагинация не применяется: объемы ответов ограничены правилами S-5, S-8 и A-8.
+
+    ## Ссылки
+
+    * [Продуктовые требования](docs/product-requirements.md)
+    * [ADR 0001. Scope MVP и базовая архитектура](docs/adr/0001-mvp-scope-and-architecture.md)
+    * [ADR 0002. Решения API-контракта](docs/adr/0002-api-contract-decisions.md)
+    * [Руководство по контракту, lint и mock](docs/api.md)
+  license:
+    name: MIT
+    identifier: MIT
+  contact:
+    name: Booking Call maintainers
+    url: https://github.com/nullorone/ai-for-developers-project-386
+
+servers:
+  - url: http://localhost:3000/api/v1
+    description: Локальный backend (Docker Compose или `npm run start:dev`)
+  - url: http://127.0.0.1:4010
+    description: |
+      Локальный mock server (Prism). Prism отбрасывает базовый путь сервера и
+      обслуживает операции от корня, поэтому здесь префикс `/api/v1` отсутствует.
+      См. `docs/api.md`.
+
+tags:
+  - name: Calendar
+    description: Публичный просмотр календаря и свободных слотов.
+  - name: Bookings
+    description: Создание бронирования гостем.
+  - name: Cancellation
+    description: Просмотр и отмена бронирования по management token.
+  - name: Owner availability
+    description: Управление интервалами доступности владельцем.
+  - name: Owner bookings
+    description: Список будущих встреч и перенос встречи владельцем.
+  - name: System
+    description: Служебные пробы работоспособности.
+
+paths:
+  /calendars/{slug}:
+    parameters:
+      - $ref: '#/components/parameters/CalendarSlug'
+    get:
+      tags: [Calendar]
+      operationId: getCalendarBySlug
+      summary: Получить публичный календарь
+      description: |
+        Возвращает публичное описание календаря: заголовок, описание, часовой пояс
+        владельца в формате IANA, фиксированную длительность слота и продуктовые
+        ограничения бронирования (лид-тайм, горизонт).
+
+        Часовой пояс владельца информационный: он не влияет на расчет слотов
+        (правило T-5). Если календаря с таким `slug` нет, возвращается `404`
+        без раскрытия существования других календарей (US-G1 AC2).
+      responses:
+        '200':
+          description: Календарь найден.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Calendar'
+              examples:
+                demo:
+                  summary: Демонстрационный календарь
+                  value:
+                    id: 6f1c2f0e-9a1e-4d3b-9a4a-0f5b3f2a1c11
+                    slug: demo
+                    title: Консультация 30 минут
+                    description: Короткий звонок для обсуждения задачи и следующих шагов.
+                    ownerTimeZone: Europe/Amsterdam
+                    slotDurationMinutes: 30
+                    minimumLeadTimeMinutes: 60
+                    bookingHorizonDays: 90
+        '404':
+          $ref: '#/components/responses/CalendarNotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /calendars/{slug}/slots:
+    parameters:
+      - $ref: '#/components/parameters/CalendarSlug'
+      - $ref: '#/components/parameters/SlotsFrom'
+      - $ref: '#/components/parameters/SlotsTo'
+    get:
+      tags: [Calendar]
+      operationId: listCalendarSlots
+      summary: Получить свободные слоты календаря
+      description: |
+        Возвращает свободные 30-минутные слоты календаря в запрошенном UTC-диапазоне.
+
+        Правила отбора:
+
+        * слот полностью лежит внутри опубликованного интервала доступности (S-1, S-2);
+        * на начало слота нет активного (`CONFIRMED`) бронирования (S-2);
+        * `slot.startsAt >= now + 60 минут` (минимальный лид-тайм, S-3, B-3);
+        * `from <= slot.startsAt < to` (S-6);
+        * слоты отсортированы по `startsAt` по возрастанию и не содержат дубликатов (S-7).
+
+        Ограничения диапазона (S-5), нарушение любого из них дает `422`:
+
+        * `to` строго позже `from`;
+        * `to - from <= 31 дня`;
+        * `from >= now - 1 день`;
+        * `to <= now + 90 дней`.
+
+        Операция безопасна и не имеет побочных эффектов: слоты не резервируются
+        на время заполнения формы (S-9). Пустой список — валидный успешный ответ
+        (US-G2 AC6). Пагинации нет: максимум 31 день × 48 слотов = 1488 элементов (S-8).
+      responses:
+        '200':
+          description: Список свободных слотов (возможно пустой).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SlotList'
+              examples:
+                withSlots:
+                  summary: Три свободных слота
+                  value:
+                    calendarId: 6f1c2f0e-9a1e-4d3b-9a4a-0f5b3f2a1c11
+                    from: '2026-09-01T00:00:00Z'
+                    to: '2026-09-08T00:00:00Z'
+                    slotDurationMinutes: 30
+                    generatedAt: '2026-09-01T07:12:44Z'
+                    slots:
+                      - startsAt: '2026-09-01T09:00:00Z'
+                        endsAt: '2026-09-01T09:30:00Z'
+                      - startsAt: '2026-09-01T09:30:00Z'
+                        endsAt: '2026-09-01T10:00:00Z'
+                      - startsAt: '2026-09-02T13:00:00Z'
+                        endsAt: '2026-09-02T13:30:00Z'
+                empty:
+                  summary: Свободного времени в диапазоне нет
+                  value:
+                    calendarId: 6f1c2f0e-9a1e-4d3b-9a4a-0f5b3f2a1c11
+                    from: '2026-09-01T00:00:00Z'
+                    to: '2026-09-08T00:00:00Z'
+                    slotDurationMinutes: 30
+                    generatedAt: '2026-09-01T07:12:44Z'
+                    slots: []
+        '400':
+          $ref: '#/components/responses/MalformedRequest'
+        '404':
+          $ref: '#/components/responses/CalendarNotFound'
+        '422':
+          description: Диапазон запроса нарушает правила S-4 или S-5.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                rangeTooLong:
+                  summary: Диапазон длиннее 31 дня
+                  value:
+                    code: VALIDATION_ERROR
+                    message: Request range is invalid.
+                    details:
+                      - location: query
+                        field: to
+                        rule: S-5
+                        message: Range between "from" and "to" must not exceed 31 days.
+                    requestId: 1b1c1a4f-2c58-4a4b-9d3a-6e0a2a2f8d21
+                    timestamp: '2026-09-01T07:12:44Z'
+                notUtc:
+                  summary: Смещение отличается от Z
+                  value:
+                    code: VALIDATION_ERROR
+                    message: Request range is invalid.
+                    details:
+                      - location: query
+                        field: from
+                        rule: T-1
+                        message: Timestamp must be RFC 3339 UTC with the "Z" suffix.
+                    requestId: 3f0f7f21-9f0a-4a0b-8a7c-1f2b3c4d5e6f
+                    timestamp: '2026-09-01T07:12:44Z'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /calendars/{slug}/bookings:
+    parameters:
+      - $ref: '#/components/parameters/CalendarSlug'
+    post:
+      tags: [Bookings]
+      operationId: createBooking
+      summary: Забронировать слот
+      description: |
+        Создает бронирование гостя на свободный 30-минутный слот.
+
+        Клиент передает только `startsAt`; `endsAt` вычисляется сервером как
+        `startsAt + 30 минут` (правило B-2). Слот должен быть кратен 30 минутам,
+        полностью лежать внутри опубликованной доступности, быть свободным и
+        удовлетворять лид-тайму 60 минут и горизонту 90 дней (B-1, B-3, B-4).
+
+        ### Идемпотентность
+
+        Необязательный заголовок `Idempotency-Key` (16–128 символов) делает создание
+        повторяемым (правило B-7). Повтор с тем же ключом и тем же телом возвращает
+        результат первой операции, включая management token (правило B-8), и заголовок
+        `Idempotency-Replayed: true`. Повтор с тем же ключом и другим телом отвергается
+        конфликтом `IDEMPOTENCY_KEY_REUSED`. Область действия ключа — календарь и данная
+        операция, TTL записи идемпотентности — 24 часа.
+
+        ### Management token
+
+        Открытый management token возвращается **только** в ответе на создание
+        (и в идемпотентном повторе). Отдельной операции «получить токен» не существует,
+        восстановление невозможно (правила M-4, M-5). Клиент обязан поместить токен во
+        fragment ссылки управления и передавать его далее только в заголовке
+        `X-Booking-Token` (правила M-6, M-7).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateBookingRequest'
+            examples:
+              minimal:
+                summary: Минимальный запрос
+                value:
+                  startsAt: '2026-09-01T09:00:00Z'
+                  guestName: Alex Guest
+                  guestEmail: guest@example.com
+              withComment:
+                summary: С комментарием
+                value:
+                  startsAt: '2026-09-01T09:30:00Z'
+                  guestName: Sam Visitor
+                  guestEmail: sam.visitor@example.com
+                  comment: Хочу обсудить миграцию на новый API.
+      responses:
+        '201':
+          description: |
+            Бронирование создано, либо возвращен сохраненный результат первой
+            операции с тем же `Idempotency-Key` (см. заголовок `Idempotency-Replayed`).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Location:
+              description: Путь операции просмотра/отмены созданного бронирования.
+              required: true
+              schema:
+                type: string
+                examples:
+                  - /api/v1/bookings/8b6b8a2a-4a3e-4a63-9d0f-2f1a5c4b7e10/cancellation
+            Idempotency-Replayed:
+              description: |
+                `true`, если ответ воспроизведен по ранее использованному
+                `Idempotency-Key` и новое бронирование не создавалось.
+              required: false
+              schema:
+                type: boolean
+                examples:
+                  - false
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookingCreated'
+              examples:
+                created:
+                  summary: Бронирование подтверждено
+                  value:
+                    id: 8b6b8a2a-4a3e-4a63-9d0f-2f1a5c4b7e10
+                    calendarId: 6f1c2f0e-9a1e-4d3b-9a4a-0f5b3f2a1c11
+                    calendarSlug: demo
+                    calendarTitle: Консультация 30 минут
+                    startsAt: '2026-09-01T09:00:00Z'
+                    endsAt: '2026-09-01T09:30:00Z'
+                    durationMinutes: 30
+                    status: CONFIRMED
+                    createdAt: '2026-08-30T18:04:11Z'
+                    managementToken: 6Qk9m2Xh1sT0pV7cRb4YwLdF3nJgZaEu8HrKtN5MvQo
+                    managementPath: /bookings/8b6b8a2a-4a3e-4a63-9d0f-2f1a5c4b7e10
+        '400':
+          $ref: '#/components/responses/MalformedRequest'
+        '404':
+          $ref: '#/components/responses/CalendarNotFound'
+        '409':
+          description: |
+            Конфликт состояния: слот занят активным бронированием (`SLOT_TAKEN`,
+            правило B-5) либо `Idempotency-Key` повторно использован с другим телом
+            (`IDEMPOTENCY_KEY_REUSED`, правило B-7).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                slotTaken:
+                  summary: Слот уже занят
+                  value:
+                    code: SLOT_TAKEN
+                    message: The requested slot is no longer available.
+                    details:
+                      - location: body
+                        field: startsAt
+                        rule: B-5
+                        message: An active booking already exists for this slot.
+                    requestId: 9a4c2f18-6a2d-4d0e-8f6b-5c1d2e3f4a5b
+                    timestamp: '2026-08-30T18:04:11Z'
+                idempotencyKeyReused:
+                  summary: Тот же ключ, другое тело
+                  value:
+                    code: IDEMPOTENCY_KEY_REUSED
+                    message: Idempotency-Key was already used with a different request body.
+                    details:
+                      - location: header
+                        field: Idempotency-Key
+                        rule: B-7
+                        message: Use a new key for a new booking attempt.
+                    requestId: 0d7c9b31-1e5a-4c7f-93a6-8b2c4d6e0f13
+                    timestamp: '2026-08-30T18:04:11Z'
+        '422':
+          description: |
+            Данные запроса не проходят валидацию: время вне сетки 30 минут, вне
+            доступности, в прошлом, ближе лид-тайма, дальше горизонта, либо данные
+            гостя нарушают ограничения B-6.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                guestFields:
+                  summary: Некорректные данные гостя
+                  value:
+                    code: VALIDATION_ERROR
+                    message: Request body is invalid.
+                    details:
+                      - location: body
+                        field: guestName
+                        rule: B-6
+                        message: Guest name must be 2 to 80 characters after trimming.
+                      - location: body
+                        field: guestEmail
+                        rule: B-6
+                        message: Guest email must be a syntactically valid address.
+                    requestId: 4e2b6c80-7d3f-4a19-84c2-9f0a1b2c3d4e
+                    timestamp: '2026-08-30T18:04:11Z'
+                leadTime:
+                  summary: До начала слота меньше лид-тайма
+                  value:
+                    code: VALIDATION_ERROR
+                    message: Request body is invalid.
+                    details:
+                      - location: body
+                        field: startsAt
+                        rule: B-3
+                        message: Slot must start at least 60 minutes from now.
+                    requestId: 7c3d9e21-5b4a-4f28-9c1d-2a3b4c5d6e7f
+                    timestamp: '2026-08-30T18:04:11Z'
+                outsideAvailability:
+                  summary: Слот вне опубликованной доступности
+                  value:
+                    code: VALIDATION_ERROR
+                    message: Request body is invalid.
+                    details:
+                      - location: body
+                        field: startsAt
+                        rule: B-1
+                        message: Slot is not inside a published availability window.
+                    requestId: 2f8a1c04-3d6b-4e57-a9c8-0b1d2e3f4a5c
+                    timestamp: '2026-08-30T18:04:11Z'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /bookings/{bookingId}/cancellation:
+    parameters:
+      - $ref: '#/components/parameters/BookingId'
+      - $ref: '#/components/parameters/BookingToken'
+    get:
+      tags: [Cancellation]
+      operationId: getBookingCancellation
+      summary: Просмотреть бронирование по management token
+      description: |
+        Возвращает минимальную карточку бронирования для страницы управления:
+        время, длительность, статус, время отмены и признак возможности отмены
+        (правило C-7).
+
+        Персональные данные не возвращаются: имя, email и комментарий гостя
+        отсутствуют в ответе намеренно, чтобы утечка ссылки была максимально
+        бесполезной.
+
+        Если токен отсутствует, неверен или относится к другому бронированию,
+        возвращается `403 BOOKING_TOKEN_INVALID`. Тот же ответ возвращается для
+        несуществующего бронирования: случаи неразличимы (правило M-11), поэтому
+        `404` у этой операции не используется.
+      responses:
+        '200':
+          description: Бронирование найдено, токен корректен.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookingCancellationView'
+              examples:
+                confirmed:
+                  summary: Подтвержденная будущая встреча
+                  value:
+                    id: 8b6b8a2a-4a3e-4a63-9d0f-2f1a5c4b7e10
+                    calendarTitle: Консультация 30 минут
+                    startsAt: '2026-09-01T09:00:00Z'
+                    endsAt: '2026-09-01T09:30:00Z'
+                    durationMinutes: 30
+                    status: CONFIRMED
+                    cancelledAt: null
+                    rescheduledAt: null
+                    cancellable: true
+                cancelled:
+                  summary: Встреча уже отменена
+                  value:
+                    id: 8b6b8a2a-4a3e-4a63-9d0f-2f1a5c4b7e10
+                    calendarTitle: Консультация 30 минут
+                    startsAt: '2026-09-01T09:00:00Z'
+                    endsAt: '2026-09-01T09:30:00Z'
+                    durationMinutes: 30
+                    status: CANCELLED
+                    cancelledAt: '2026-08-31T10:22:03Z'
+                    rescheduledAt: null
+                    cancellable: false
+        '400':
+          $ref: '#/components/responses/MalformedRequest'
+        '403':
+          $ref: '#/components/responses/BookingTokenInvalid'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    post:
+      tags: [Cancellation]
+      operationId: confirmBookingCancellation
+      summary: Подтвердить отмену бронирования
+      description: |
+        Переводит бронирование в статус `CANCELLED`, фиксирует `cancelledAt`
+        и немедленно освобождает слот (правила C-1, C-5).
+
+        Операция идемпотентна: повторный запрос с корректным токеном возвращает
+        то же тело с тем же `cancelledAt` и не порождает нового доменного события
+        (правило C-2). Поэтому используется `200`, а не `204`: стабильный результат
+        должен быть виден клиенту без дополнительного запроса.
+
+        Отмена возможна только для встречи, начало которой строго в будущем
+        (правило C-3); иначе возвращается `409 BOOKING_ALREADY_STARTED`, а состояние
+        не меняется.
+
+        Тело запроса не требуется: подтверждение выражается самим вызовом,
+        причина отмены в MVP не собирается (правило C-6).
+      responses:
+        '200':
+          description: Бронирование отменено либо уже было отменено ранее.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookingCancellationView'
+              examples:
+                cancelled:
+                  summary: Отмена выполнена
+                  value:
+                    id: 8b6b8a2a-4a3e-4a63-9d0f-2f1a5c4b7e10
+                    calendarTitle: Консультация 30 минут
+                    startsAt: '2026-09-01T09:00:00Z'
+                    endsAt: '2026-09-01T09:30:00Z'
+                    durationMinutes: 30
+                    status: CANCELLED
+                    cancelledAt: '2026-08-31T10:22:03Z'
+                    rescheduledAt: null
+                    cancellable: false
+                repeated:
+                  summary: Повторная отмена, состояние стабильно
+                  value:
+                    id: 8b6b8a2a-4a3e-4a63-9d0f-2f1a5c4b7e10
+                    calendarTitle: Консультация 30 минут
+                    startsAt: '2026-09-01T09:00:00Z'
+                    endsAt: '2026-09-01T09:30:00Z'
+                    durationMinutes: 30
+                    status: CANCELLED
+                    cancelledAt: '2026-08-31T10:22:03Z'
+                    rescheduledAt: null
+                    cancellable: false
+        '400':
+          $ref: '#/components/responses/MalformedRequest'
+        '403':
+          $ref: '#/components/responses/BookingTokenInvalid'
+        '409':
+          description: Встреча уже началась или прошла, отмена неприменима (правило C-3).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                alreadyStarted:
+                  summary: Прошедшая встреча
+                  value:
+                    code: BOOKING_ALREADY_STARTED
+                    message: A booking that has already started cannot be cancelled.
+                    details:
+                      - location: path
+                        field: bookingId
+                        rule: C-3
+                        message: Cancellation is allowed only before the meeting starts.
+                    requestId: 5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d
+                    timestamp: '2026-09-01T09:05:00Z'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /owner/availability:
+    get:
+      tags: [Owner availability]
+      operationId: listOwnerAvailability
+      summary: Список интервалов доступности
+      description: |
+        Возвращает все опубликованные интервалы доступности единственного календаря
+        в UTC, отсортированные по `startsAt` по возрастанию (US-O2 AC1).
+
+        Пагинация не применяется: количество интервалов ограничено правилом A-8
+        (максимум 500 на календарь).
+      responses:
+        '200':
+          description: Список интервалов (возможно пустой).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AvailabilityWindowList'
+              examples:
+                twoWindows:
+                  summary: Два интервала
+                  value:
+                    calendarId: 6f1c2f0e-9a1e-4d3b-9a4a-0f5b3f2a1c11
+                    total: 2
+                    maxWindows: 500
+                    items:
+                      - id: c0a1b2c3-d4e5-4f60-8a1b-2c3d4e5f6071
+                        startsAt: '2026-09-01T09:00:00Z'
+                        endsAt: '2026-09-01T13:00:00Z'
+                        createdAt: '2026-08-25T08:00:00Z'
+                      - id: d1b2c3d4-e5f6-4071-8b2c-3d4e5f607182
+                        startsAt: '2026-09-02T12:00:00Z'
+                        endsAt: '2026-09-02T16:30:00Z'
+                        createdAt: '2026-08-25T08:01:12Z'
+                empty:
+                  summary: Доступность не опубликована
+                  value:
+                    calendarId: 6f1c2f0e-9a1e-4d3b-9a4a-0f5b3f2a1c11
+                    total: 0
+                    maxWindows: 500
+                    items: []
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    post:
+      tags: [Owner availability]
+      operationId: createOwnerAvailabilityWindow
+      summary: Опубликовать интервал доступности
+      description: |
+        Создает интервал доступности единственного календаря.
+
+        Требования (правила A-3 — A-8):
+
+        * `startsAt` и `endsAt` кратны 30 минутам в UTC, секунды нулевые;
+        * `endsAt` строго позже `startsAt`, минимальная длина — 30 минут;
+        * `endsAt > now`: интервал целиком в прошлом создать нельзя;
+        * длина интервала не больше 14 дней;
+        * в календаре не больше 500 интервалов;
+        * интервал не пересекается с существующими; смежные интервалы
+          (`endsAt` одного равен `startsAt` другого) разрешены.
+
+        Пересечение возвращает `409 AVAILABILITY_OVERLAP`, включая случай
+        конкурентного создания (US-O1 AC7).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAvailabilityWindowRequest'
+            examples:
+              morning:
+                summary: Утро рабочего дня
+                value:
+                  startsAt: '2026-09-03T09:00:00Z'
+                  endsAt: '2026-09-03T13:00:00Z'
+      responses:
+        '201':
+          description: Интервал создан.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Location:
+              description: Путь созданного интервала.
+              required: true
+              schema:
+                type: string
+                examples:
+                  - /api/v1/owner/availability/c0a1b2c3-d4e5-4f60-8a1b-2c3d4e5f6071
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AvailabilityWindow'
+              examples:
+                created:
+                  summary: Созданный интервал
+                  value:
+                    id: c0a1b2c3-d4e5-4f60-8a1b-2c3d4e5f6071
+                    startsAt: '2026-09-03T09:00:00Z'
+                    endsAt: '2026-09-03T13:00:00Z'
+                    createdAt: '2026-08-30T18:20:05Z'
+        '400':
+          $ref: '#/components/responses/MalformedRequest'
+        '409':
+          description: Интервал пересекается с уже существующим (правило A-5).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                overlap:
+                  summary: Пересечение интервалов
+                  value:
+                    code: AVAILABILITY_OVERLAP
+                    message: Availability window overlaps an existing one.
+                    details:
+                      - location: body
+                        field: startsAt
+                        rule: A-5
+                        message: Overlapping window 2026-09-03T08:00:00Z–2026-09-03T12:00:00Z already exists.
+                    requestId: 6b7c8d9e-0f1a-4b2c-8d3e-4f5a6b7c8d9e
+                    timestamp: '2026-08-30T18:20:05Z'
+        '422':
+          description: |
+            Границы интервала нарушают правила A-3, A-4, A-6, A-7 или превышен
+            лимит количества интервалов A-8.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                notAligned:
+                  summary: Границы не кратны 30 минутам
+                  value:
+                    code: VALIDATION_ERROR
+                    message: Request body is invalid.
+                    details:
+                      - location: body
+                        field: startsAt
+                        rule: A-3
+                        message: Minutes must be 00 or 30 and seconds must be zero.
+                    requestId: 8d9e0f1a-2b3c-4d5e-8f6a-7b8c9d0e1f2a
+                    timestamp: '2026-08-30T18:20:05Z'
+                limitReached:
+                  summary: Достигнут лимит интервалов
+                  value:
+                    code: VALIDATION_ERROR
+                    message: Request body is invalid.
+                    details:
+                      - location: body
+                        field: startsAt
+                        rule: A-8
+                        message: Calendar already contains the maximum of 500 availability windows.
+                    requestId: 9e0f1a2b-3c4d-4e5f-8a6b-7c8d9e0f1a2b
+                    timestamp: '2026-08-30T18:20:05Z'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /owner/availability/{windowId}:
+    parameters:
+      - $ref: '#/components/parameters/AvailabilityWindowId'
+    delete:
+      tags: [Owner availability]
+      operationId: deleteOwnerAvailabilityWindow
+      summary: Удалить интервал доступности
+      description: |
+        Удаляет интервал доступности. Тело ответа не нужно, поэтому возвращается `204`.
+
+        Удаление запрещено, если интервал пересекается хотя бы с одним подтвержденным
+        бронированием, начало которого в будущем: возвращается
+        `409 AVAILABILITY_WINDOW_HAS_BOOKINGS`, ничего не удаляется (правило A-9).
+        Прошедшие и отмененные бронирования удалению не мешают (US-O2 AC5).
+
+        Несуществующий или уже удаленный интервал дает `404` без иных побочных
+        эффектов (US-O2 AC4).
+      responses:
+        '204':
+          description: Интервал удален.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+        '404':
+          description: Интервал доступности не найден.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                notFound:
+                  summary: Интервал не найден
+                  value:
+                    code: AVAILABILITY_WINDOW_NOT_FOUND
+                    message: Availability window not found.
+                    requestId: 0f1a2b3c-4d5e-4f6a-8b7c-8d9e0f1a2b3c
+                    timestamp: '2026-08-30T18:25:40Z'
+        '409':
+          description: Интервал пересекается с будущими подтвержденными встречами (правило A-9).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                hasBookings:
+                  summary: В интервале есть будущие встречи
+                  value:
+                    code: AVAILABILITY_WINDOW_HAS_BOOKINGS
+                    message: Availability window still contains confirmed future bookings.
+                    details:
+                      - location: path
+                        field: windowId
+                        rule: A-9
+                        message: Reschedule 2 confirmed bookings before deleting this window.
+                    requestId: 1a2b3c4d-5e6f-4a7b-8c8d-9e0f1a2b3c4d
+                    timestamp: '2026-08-30T18:25:40Z'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /owner/bookings:
+    get:
+      tags: [Owner bookings]
+      operationId: listOwnerBookings
+      summary: Список будущих подтвержденных встреч
+      description: |
+        Возвращает встречи со статусом `CONFIRMED`, начало которых строго позже
+        текущего момента, отсортированные по `startsAt` по возрастанию (US-O3).
+
+        Отмененные и прошедшие встречи в список не попадают. Комментарий гостя
+        не возвращается, email маскируется (правило R-10). Пагинации нет: список
+        ограничен горизонтом бронирования 90 дней и объемом доступности.
+      responses:
+        '200':
+          description: Список будущих подтвержденных встреч (возможно пустой).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OwnerBookingList'
+              examples:
+                twoBookings:
+                  summary: Две будущие встречи
+                  value:
+                    calendarId: 6f1c2f0e-9a1e-4d3b-9a4a-0f5b3f2a1c11
+                    total: 2
+                    generatedAt: '2026-08-30T18:30:00Z'
+                    items:
+                      - id: 8b6b8a2a-4a3e-4a63-9d0f-2f1a5c4b7e10
+                        startsAt: '2026-09-01T09:00:00Z'
+                        endsAt: '2026-09-01T09:30:00Z'
+                        durationMinutes: 30
+                        status: CONFIRMED
+                        guestName: Alex Guest
+                        guestEmailMasked: g***@example.com
+                        createdAt: '2026-08-30T18:04:11Z'
+                        rescheduledAt: null
+                      - id: 2c7d8e9f-0a1b-4c2d-8e3f-4a5b6c7d8e9f
+                        startsAt: '2026-09-02T13:00:00Z'
+                        endsAt: '2026-09-02T13:30:00Z'
+                        durationMinutes: 30
+                        status: CONFIRMED
+                        guestName: Sam Visitor
+                        guestEmailMasked: s***@example.com
+                        createdAt: '2026-08-29T11:41:52Z'
+                        rescheduledAt: '2026-08-30T09:15:00Z'
+                empty:
+                  summary: Будущих встреч нет
+                  value:
+                    calendarId: 6f1c2f0e-9a1e-4d3b-9a4a-0f5b3f2a1c11
+                    total: 0
+                    generatedAt: '2026-08-30T18:30:00Z'
+                    items: []
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /owner/bookings/{bookingId}/available-slots:
+    parameters:
+      - $ref: '#/components/parameters/BookingId'
+      - $ref: '#/components/parameters/RescheduleFrom'
+      - $ref: '#/components/parameters/RescheduleTo'
+    get:
+      tags: [Owner bookings]
+      operationId: listOwnerBookingRescheduleSlots
+      summary: Свободные слоты для переноса встречи
+      description: |
+        Возвращает слоты, доступные для переноса конкретной встречи, по тем же
+        правилам, что и публичный список слотов (доступность, лид-тайм, отсутствие
+        активных броней).
+
+        Диапазон по умолчанию — от текущего момента до `now + 30 дней` (US-O4 AC1).
+        Явно переданные `from` и `to` подчиняются тем же ограничениям, что и в
+        публичном запросе слотов (правило S-5).
+
+        Текущий слот встречи, если он лежит внутри доступности, включается в список
+        с признаком `current: true`, чтобы интерфейс мог его показать и не предлагать
+        как новый (US-O4 AC3). Для отмененной или уже начавшейся встречи возвращается
+        `409 BOOKING_NOT_RESCHEDULABLE` (US-O4 AC2).
+      responses:
+        '200':
+          description: Список слотов, доступных для переноса.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RescheduleSlotList'
+              examples:
+                withCurrent:
+                  summary: Текущий слот и две альтернативы
+                  value:
+                    bookingId: 8b6b8a2a-4a3e-4a63-9d0f-2f1a5c4b7e10
+                    currentStartsAt: '2026-09-01T09:00:00Z'
+                    from: '2026-08-30T18:30:00Z'
+                    to: '2026-09-29T18:30:00Z'
+                    slotDurationMinutes: 30
+                    generatedAt: '2026-08-30T18:30:00Z'
+                    slots:
+                      - startsAt: '2026-09-01T09:00:00Z'
+                        endsAt: '2026-09-01T09:30:00Z'
+                        current: true
+                      - startsAt: '2026-09-01T10:00:00Z'
+                        endsAt: '2026-09-01T10:30:00Z'
+                        current: false
+                      - startsAt: '2026-09-02T13:30:00Z'
+                        endsAt: '2026-09-02T14:00:00Z'
+                        current: false
+        '400':
+          $ref: '#/components/responses/MalformedRequest'
+        '404':
+          $ref: '#/components/responses/BookingNotFound'
+        '409':
+          description: Встреча отменена или уже началась, перенос неприменим (правило R-1).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                cancelled:
+                  summary: Встреча отменена
+                  value:
+                    code: BOOKING_NOT_RESCHEDULABLE
+                    message: Only confirmed future bookings can be rescheduled.
+                    details:
+                      - location: path
+                        field: bookingId
+                        rule: R-1
+                        message: Booking status is CANCELLED.
+                    requestId: 3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f
+                    timestamp: '2026-08-30T18:30:00Z'
+        '422':
+          $ref: '#/components/responses/SlotRangeValidationFailed'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /owner/bookings/{bookingId}/schedule:
+    parameters:
+      - $ref: '#/components/parameters/BookingId'
+    patch:
+      tags: [Owner bookings]
+      operationId: rescheduleOwnerBooking
+      summary: Перенести встречу на другой слот
+      description: |
+        Атомарно переносит подтвержденную будущую встречу на другой свободный слот
+        (правила R-1 — R-8).
+
+        Запрос содержит только новое начало `startsAt`; конец вычисляется системой
+        как `startsAt + 30 минут` (US-O5 AC8). Клиент не может задать произвольную
+        длительность.
+
+        Освобождение старого слота, занятие нового, изменение времени встречи и
+        создание доменного события выполняются в одной транзакции. При любой ошибке,
+        включая конкурентный захват целевого слота, транзакция откатывается целиком:
+        встреча остается в прежнем времени, старый слот — занятым (правила R-3, R-4).
+
+        Статус остается `CONFIRMED` (правило R-5). Перенос на то же самое время —
+        успешная операция без изменений: `rescheduledAt` не обновляется и событие
+        не порождается (правило R-8).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RescheduleBookingRequest'
+            examples:
+              moveLater:
+                summary: Перенос на час позже
+                value:
+                  startsAt: '2026-09-01T10:00:00Z'
+      responses:
+        '200':
+          description: |
+            Встреча перенесена, либо новое время совпало с текущим и встреча
+            возвращена без изменений (правило R-8).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OwnerBooking'
+              examples:
+                rescheduled:
+                  summary: Время изменено
+                  value:
+                    id: 8b6b8a2a-4a3e-4a63-9d0f-2f1a5c4b7e10
+                    startsAt: '2026-09-01T10:00:00Z'
+                    endsAt: '2026-09-01T10:30:00Z'
+                    durationMinutes: 30
+                    status: CONFIRMED
+                    guestName: Alex Guest
+                    guestEmailMasked: g***@example.com
+                    createdAt: '2026-08-30T18:04:11Z'
+                    rescheduledAt: '2026-08-30T18:45:22Z'
+                unchanged:
+                  summary: Перенос на то же время, изменений нет
+                  value:
+                    id: 8b6b8a2a-4a3e-4a63-9d0f-2f1a5c4b7e10
+                    startsAt: '2026-09-01T09:00:00Z'
+                    endsAt: '2026-09-01T09:30:00Z'
+                    durationMinutes: 30
+                    status: CONFIRMED
+                    guestName: Alex Guest
+                    guestEmailMasked: g***@example.com
+                    createdAt: '2026-08-30T18:04:11Z'
+                    rescheduledAt: null
+        '400':
+          $ref: '#/components/responses/MalformedRequest'
+        '404':
+          $ref: '#/components/responses/BookingNotFound'
+        '409':
+          description: |
+            Целевой слот занят активной встречей (`SLOT_TAKEN`, правило B-5) либо
+            встреча отменена или уже началась (`BOOKING_NOT_RESCHEDULABLE`, правило R-1).
+            В обоих случаях исходная встреча не изменена.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                slotTaken:
+                  summary: Целевой слот занят
+                  value:
+                    code: SLOT_TAKEN
+                    message: The requested slot is no longer available.
+                    details:
+                      - location: body
+                        field: startsAt
+                        rule: B-5
+                        message: An active booking already exists for this slot.
+                    requestId: 4d5e6f7a-8b9c-4d0e-8f1a-2b3c4d5e6f7a
+                    timestamp: '2026-08-30T18:45:22Z'
+                notReschedulable:
+                  summary: Встреча уже началась
+                  value:
+                    code: BOOKING_NOT_RESCHEDULABLE
+                    message: Only confirmed future bookings can be rescheduled.
+                    details:
+                      - location: path
+                        field: bookingId
+                        rule: R-1
+                        message: Booking has already started.
+                    requestId: 5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b
+                    timestamp: '2026-08-30T18:45:22Z'
+        '422':
+          description: |
+            Новое время не кратно 30 минутам, вне доступности, в прошлом, ближе
+            лид-тайма или дальше горизонта (правило R-2).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                outsideAvailability:
+                  summary: Новое время вне доступности
+                  value:
+                    code: VALIDATION_ERROR
+                    message: Request body is invalid.
+                    details:
+                      - location: body
+                        field: startsAt
+                        rule: R-2
+                        message: Slot is not inside a published availability window.
+                    requestId: 6f7a8b9c-0d1e-4f2a-8b3c-4d5e6f7a8b9c
+                    timestamp: '2026-08-30T18:45:22Z'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /health:
+    get:
+      tags: [System]
+      operationId: getHealth
+      summary: Общая проба работоспособности
+      description: |
+        Возвращает агрегированное состояние сервиса и его зависимостей.
+        Ответ не содержит персональных данных и секретов (US-S2 AC1).
+      responses:
+        '200':
+          description: Сервис работоспособен.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+              examples:
+                up:
+                  summary: Все зависимости доступны
+                  value:
+                    status: up
+                    checks:
+                      - name: database
+                        status: up
+                      - name: messageBroker
+                        status: up
+                    timestamp: '2026-08-30T18:50:00Z'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /health/live:
+    get:
+      tags: [System]
+      operationId: getLiveness
+      summary: Проба живости
+      description: |
+        Подтверждает, что процесс запущен и способен обрабатывать запросы.
+        Зависимости не проверяются, поэтому проба не возвращает `503`
+        при недоступности базы.
+      responses:
+        '200':
+          description: Процесс жив.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+              examples:
+                up:
+                  summary: Процесс жив
+                  value:
+                    status: up
+                    checks: []
+                    timestamp: '2026-08-30T18:50:00Z'
+
+  /health/ready:
+    get:
+      tags: [System]
+      operationId: getReadiness
+      summary: Проба готовности
+      description: |
+        Подтверждает готовность принимать трафик. Учитывает доступность базы
+        данных (правило N-18); при ее недоступности сервис сообщает о неготовности
+        статусом `503` (US-S2 AC2).
+      responses:
+        '200':
+          description: Сервис готов принимать трафик.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+              examples:
+                ready:
+                  summary: Готов
+                  value:
+                    status: up
+                    checks:
+                      - name: database
+                        status: up
+                    timestamp: '2026-08-30T18:50:00Z'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+components:
+  parameters:
+    CalendarSlug:
+      name: slug
+      in: path
+      required: true
+      description: Публичный идентификатор календаря из ссылки.
+      schema:
+        $ref: '#/components/schemas/CalendarSlug'
+      example: demo
+
+    BookingId:
+      name: bookingId
+      in: path
+      required: true
+      description: Идентификатор бронирования.
+      schema:
+        $ref: '#/components/schemas/Uuid'
+      example: 8b6b8a2a-4a3e-4a63-9d0f-2f1a5c4b7e10
+
+    AvailabilityWindowId:
+      name: windowId
+      in: path
+      required: true
+      description: Идентификатор интервала доступности.
+      schema:
+        $ref: '#/components/schemas/Uuid'
+      example: c0a1b2c3-d4e5-4f60-8a1b-2c3d4e5f6071
+
+    SlotsFrom:
+      name: from
+      in: query
+      required: true
+      description: |
+        Нижняя граница диапазона (включительно) в UTC. Возвращаются слоты с
+        `startsAt >= from`. Должна быть не раньше, чем `now - 1 день` (правило S-5).
+      schema:
+        $ref: '#/components/schemas/UtcTimestamp'
+      example: '2026-09-01T00:00:00Z'
+
+    SlotsTo:
+      name: to
+      in: query
+      required: true
+      description: |
+        Верхняя граница диапазона (исключительно) в UTC. Возвращаются слоты с
+        `startsAt < to`. Должна быть строго позже `from`, не дальше `now + 90 дней`,
+        и диапазон не длиннее 31 дня (правило S-5).
+      schema:
+        $ref: '#/components/schemas/UtcTimestamp'
+      example: '2026-09-08T00:00:00Z'
+
+    RescheduleFrom:
+      name: from
+      in: query
+      required: false
+      description: |
+        Нижняя граница диапазона (включительно) в UTC. По умолчанию — текущий момент
+        сервера. Ограничения совпадают с правилом S-5.
+      schema:
+        $ref: '#/components/schemas/UtcTimestamp'
+      example: '2026-08-30T18:30:00Z'
+
+    RescheduleTo:
+      name: to
+      in: query
+      required: false
+      description: |
+        Верхняя граница диапазона (исключительно) в UTC. По умолчанию — `now + 30 дней`
+        (US-O4 AC1). Ограничения совпадают с правилом S-5.
+      schema:
+        $ref: '#/components/schemas/UtcTimestamp'
+      example: '2026-09-29T18:30:00Z'
+
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: |
+        Непрозрачный ключ идемпотентности попытки создания бронирования, 16–128
+        символов из набора `A-Za-z0-9._~-` (правило B-7). Заголовок необязателен:
+        без него запрос обрабатывается как обычный, а защита от гонок остается на
+        уровне правила B-5 (правило B-10). Значение не логируется (правило N-12).
+      schema:
+        $ref: '#/components/schemas/IdempotencyKey'
+      example: 8f14e45fceea167a5a36dedd4bea2543
+
+    BookingToken:
+      name: X-Booking-Token
+      in: header
+      required: true
+      description: |
+        Management token бронирования, выданный один раз при создании (правило M-4).
+        Единственный допустимый способ передачи токена: в path и query он запрещен
+        (правило M-6). Значение не логируется ни в каком виде (правило M-9).
+      schema:
+        $ref: '#/components/schemas/ManagementToken'
+      example: 6Qk9m2Xh1sT0pV7cRb4YwLdF3nJgZaEu8HrKtN5MvQo
+
+  headers:
+    XRequestId:
+      description: |
+        Идентификатор запроса для корреляции клиентских проблем с логами сервера
+        (правило N-17). Возвращается на любом ответе.
+      required: false
+      schema:
+        $ref: '#/components/schemas/Uuid'
+
+    RetryAfter:
+      description: Число секунд, через которое повтор запроса допустим.
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        examples:
+          - 30
+
+    RateLimitLimit:
+      description: Разрешенное число запросов в текущем окне (правило N-11).
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        examples:
+          - 60
+
+    RateLimitRemaining:
+      description: Остаток запросов в текущем окне.
+      required: false
+      schema:
+        type: integer
+        minimum: 0
+        examples:
+          - 0
+
+    RateLimitReset:
+      description: Число секунд до сброса окна ограничения частоты.
+      required: false
+      schema:
+        type: integer
+        minimum: 0
+        examples:
+          - 30
+
+  responses:
+    MalformedRequest:
+      description: |
+        Запрос синтаксически некорректен: нечитаемый JSON, неподдерживаемый
+        `Content-Type`, отсутствующий обязательный параметр или заголовок,
+        значение параметра неверного типа. Семантические нарушения продуктовых
+        правил возвращают `422`.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            malformedJson:
+              summary: Тело не является корректным JSON
+              value:
+                code: MALFORMED_REQUEST
+                message: Request could not be parsed.
+                details:
+                  - location: body
+                    field: '$'
+                    message: Body is not valid JSON.
+                requestId: 7a8b9c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0d
+                timestamp: '2026-08-30T18:04:11Z'
+            missingHeader:
+              summary: Отсутствует обязательный заголовок токена
+              value:
+                code: MALFORMED_REQUEST
+                message: Required header is missing.
+                details:
+                  - location: header
+                    field: X-Booking-Token
+                    message: Header is required.
+                requestId: 8b9c0d1e-2f3a-4b4c-8d5e-6f7a8b9c0d1e
+                timestamp: '2026-08-30T18:04:11Z'
+
+    CalendarNotFound:
+      description: |
+        Календарь с указанным `slug` не найден. Ответ не раскрывает существование
+        других календарей (US-G1 AC2).
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            notFound:
+              summary: Календарь не найден
+              value:
+                code: CALENDAR_NOT_FOUND
+                message: Calendar not found.
+                requestId: 9c0d1e2f-3a4b-4c5d-8e6f-7a8b9c0d1e2f
+                timestamp: '2026-08-30T18:04:11Z'
+
+    BookingNotFound:
+      description: |
+        Бронирование с указанным идентификатором не найдено. Используется только в
+        owner-операциях: операции с management token вместо этого возвращают `403`,
+        чтобы не различать «нет бронирования» и «неверный токен» (правило M-11).
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            notFound:
+              summary: Бронирование не найдено
+              value:
+                code: BOOKING_NOT_FOUND
+                message: Booking not found.
+                requestId: 0d1e2f3a-4b5c-4d6e-8f7a-8b9c0d1e2f3a
+                timestamp: '2026-08-30T18:30:00Z'
+
+    BookingTokenInvalid:
+      description: |
+        Management token отсутствует, неверен, относится к другому бронированию либо
+        бронирования не существует. Все эти случаи возвращают один и тот же ответ и
+        не раскрывают никаких данных (правило M-11).
+
+        Выбран статус `403`, а не `401`: аутентификации в системе нет, схемы
+        `WWW-Authenticate` не существует, а токен подтверждает право на конкретный
+        объект, а не личность пользователя.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            invalidToken:
+              summary: Единый отказ по токену
+              value:
+                code: BOOKING_TOKEN_INVALID
+                message: Booking management link is invalid.
+                requestId: 1e2f3a4b-5c6d-4e7f-8a8b-9c0d1e2f3a4b
+                timestamp: '2026-08-31T10:22:03Z'
+
+    SlotRangeValidationFailed:
+      description: Диапазон запроса нарушает правила S-4 или S-5.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            invalidRange:
+              summary: '"to" не позже "from"'
+              value:
+                code: VALIDATION_ERROR
+                message: Request range is invalid.
+                details:
+                  - location: query
+                    field: to
+                    rule: S-5
+                    message: '"to" must be strictly after "from".'
+                requestId: 2f3a4b5c-6d7e-4f8a-8b9c-0d1e2f3a4b5c
+                timestamp: '2026-08-30T18:30:00Z'
+
+    TooManyRequests:
+      description: |
+        Превышено ограничение частоты запросов по IP (правило N-11). Клиенту следует
+        повторить запрос не раньше, чем через `Retry-After` секунд.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+        Retry-After:
+          $ref: '#/components/headers/RetryAfter'
+        RateLimit-Limit:
+          $ref: '#/components/headers/RateLimitLimit'
+        RateLimit-Remaining:
+          $ref: '#/components/headers/RateLimitRemaining'
+        RateLimit-Reset:
+          $ref: '#/components/headers/RateLimitReset'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            rateLimited:
+              summary: Слишком много запросов
+              value:
+                code: RATE_LIMITED
+                message: Too many requests. Retry later.
+                retryAfterSeconds: 30
+                requestId: 3a4b5c6d-7e8f-4a9b-8c0d-1e2f3a4b5c6d
+                timestamp: '2026-08-30T18:04:11Z'
+
+    InternalServerError:
+      description: |
+        Непредвиденная ошибка сервера. Ответ содержит только стабильный код и
+        `requestId`; стектрейсы, SQL и имена таблиц наружу не отдаются (правило N-14).
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            internal:
+              summary: Внутренняя ошибка
+              value:
+                code: INTERNAL_ERROR
+                message: Unexpected server error.
+                requestId: 4b5c6d7e-8f9a-4b0c-8d1e-2f3a4b5c6d7e
+                timestamp: '2026-08-30T18:04:11Z'
+
+    ServiceUnavailable:
+      description: |
+        Сервис не готов принимать трафик: недоступна одна из обязательных
+        зависимостей (US-S2 AC2).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/HealthStatus'
+          examples:
+            databaseDown:
+              summary: База данных недоступна
+              value:
+                status: down
+                checks:
+                  - name: database
+                    status: down
+                timestamp: '2026-08-30T18:50:00Z'
+
+  schemas:
+    Uuid:
+      type: string
+      format: uuid
+      description: Идентификатор ресурса в формате UUID.
+      examples:
+        - 8b6b8a2a-4a3e-4a63-9d0f-2f1a5c4b7e10
+
+    UtcTimestamp:
+      type: string
+      format: date-time
+      description: |
+        Момент времени в RFC 3339, UTC, с суффиксом `Z` и точностью до секунд
+        (правило T-1). Смещения, отличные от `Z`, и доли секунды отклоняются.
+      pattern: ^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$
+      minLength: 20
+      maxLength: 20
+      examples:
+        - '2026-09-01T09:00:00Z'
+
+    SlotBoundary:
+      type: string
+      format: date-time
+      description: |
+        Граница 30-минутной сетки: момент в UTC, у которого минуты равны `00` или `30`,
+        а секунды нулевые (правила A-3, T-3).
+      pattern: ^\d{4}-\d{2}-\d{2}T\d{2}:(00|30):00Z$
+      minLength: 20
+      maxLength: 20
+      examples:
+        - '2026-09-01T09:30:00Z'
+
+    CalendarSlug:
+      type: string
+      description: Публичный идентификатор календаря в ссылке; строчные буквы, цифры и дефис.
+      pattern: ^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$
+      minLength: 1
+      maxLength: 64
+      examples:
+        - demo
+
+    IanaTimeZone:
+      type: string
+      description: |
+        Часовой пояс владельца в формате IANA. Информационный: на расчет слотов
+        не влияет (правило T-5).
+      pattern: ^[A-Za-z][A-Za-z0-9+_-]*(/[A-Za-z0-9+_-]+)*$
+      minLength: 1
+      maxLength: 64
+      examples:
+        - Europe/Amsterdam
+
+    IdempotencyKey:
+      type: string
+      description: Непрозрачный ключ идемпотентности, 16–128 символов (правило B-7).
+      pattern: ^[A-Za-z0-9._~-]{16,128}$
+      minLength: 16
+      maxLength: 128
+      examples:
+        - 8f14e45fceea167a5a36dedd4bea2543
+
+    ManagementToken:
+      type: string
+      description: |
+        URL-безопасный секрет управления бронированием, не менее 128 бит энтропии
+        (правило M-2). Выдается однократно при создании и передается только в
+        заголовке `X-Booking-Token`.
+      pattern: ^[A-Za-z0-9_-]{22,128}$
+      minLength: 22
+      maxLength: 128
+      examples:
+        - 6Qk9m2Xh1sT0pV7cRb4YwLdF3nJgZaEu8HrKtN5MvQo
+
+    BookingStatus:
+      type: string
+      description: |
+        Статус бронирования. Других статусов в MVP нет; «прошедшая встреча» —
+        производное от времени начала, а не статус. `CANCELLED` терминален.
+      enum:
+        - CONFIRMED
+        - CANCELLED
+      examples:
+        - CONFIRMED
+
+    SlotDurationMinutes:
+      type: integer
+      description: Длительность слота в минутах; в MVP всегда 30 (правило A-2).
+      const: 30
+      examples:
+        - 30
+
+    Calendar:
+      type: object
+      description: Публичное представление календаря.
+      additionalProperties: false
+      required:
+        - id
+        - slug
+        - title
+        - description
+        - ownerTimeZone
+        - slotDurationMinutes
+        - minimumLeadTimeMinutes
+        - bookingHorizonDays
+      properties:
+        id:
+          $ref: '#/components/schemas/Uuid'
+        slug:
+          $ref: '#/components/schemas/CalendarSlug'
+        title:
+          type: string
+          description: Заголовок встречи, который видит гость.
+          minLength: 1
+          maxLength: 120
+          examples:
+            - Консультация 30 минут
+        description:
+          type: [string, 'null']
+          description: Необязательное описание встречи.
+          maxLength: 1000
+          examples:
+            - Короткий звонок для обсуждения задачи и следующих шагов.
+        ownerTimeZone:
+          $ref: '#/components/schemas/IanaTimeZone'
+        slotDurationMinutes:
+          $ref: '#/components/schemas/SlotDurationMinutes'
+        minimumLeadTimeMinutes:
+          type: integer
+          description: Минимальное время от текущего момента до начала слота (правило B-3).
+          const: 60
+          examples:
+            - 60
+        bookingHorizonDays:
+          type: integer
+          description: Максимальный горизонт бронирования в днях (правило B-4).
+          const: 90
+          examples:
+            - 90
+
+    Slot:
+      type: object
+      description: Свободный 30-минутный слот, полуинтервал `[startsAt, endsAt)`.
+      additionalProperties: false
+      required:
+        - startsAt
+        - endsAt
+      properties:
+        startsAt:
+          $ref: '#/components/schemas/SlotBoundary'
+        endsAt:
+          $ref: '#/components/schemas/SlotBoundary'
+
+    SlotList:
+      type: object
+      description: |
+        Результат расчета слотов на запрошенный диапазон. Пагинации нет (правило S-8):
+        размер ответа ограничен диапазоном 31 день.
+      additionalProperties: false
+      required:
+        - calendarId
+        - from
+        - to
+        - slotDurationMinutes
+        - generatedAt
+        - slots
+      properties:
+        calendarId:
+          $ref: '#/components/schemas/Uuid'
+        from:
+          $ref: '#/components/schemas/UtcTimestamp'
+        to:
+          $ref: '#/components/schemas/UtcTimestamp'
+        slotDurationMinutes:
+          $ref: '#/components/schemas/SlotDurationMinutes'
+        generatedAt:
+          allOf:
+            - $ref: '#/components/schemas/UtcTimestamp'
+          description: |
+            Серверное время расчета. Позволяет клиенту понять, насколько данные
+            свежие, и объяснить расхождение с локальными часами (правило T-9).
+        slots:
+          type: array
+          description: Слоты, отсортированные по `startsAt` по возрастанию, без дубликатов (S-7).
+          maxItems: 1488
+          items:
+            $ref: '#/components/schemas/Slot'
+
+    RescheduleSlot:
+      type: object
+      description: Слот, доступный для переноса встречи.
+      additionalProperties: false
+      required:
+        - startsAt
+        - endsAt
+        - current
+      properties:
+        startsAt:
+          $ref: '#/components/schemas/SlotBoundary'
+        endsAt:
+          $ref: '#/components/schemas/SlotBoundary'
+        current:
+          type: boolean
+          description: |
+            `true`, если это текущий слот переносимой встречи (US-O4 AC3).
+            Интерфейс не должен предлагать его как новое время.
+          examples:
+            - false
+
+    RescheduleSlotList:
+      type: object
+      description: Слоты, доступные для переноса конкретной встречи.
+      additionalProperties: false
+      required:
+        - bookingId
+        - currentStartsAt
+        - from
+        - to
+        - slotDurationMinutes
+        - generatedAt
+        - slots
+      properties:
+        bookingId:
+          $ref: '#/components/schemas/Uuid'
+        currentStartsAt:
+          allOf:
+            - $ref: '#/components/schemas/SlotBoundary'
+          description: Текущее начало переносимой встречи.
+        from:
+          $ref: '#/components/schemas/UtcTimestamp'
+        to:
+          $ref: '#/components/schemas/UtcTimestamp'
+        slotDurationMinutes:
+          $ref: '#/components/schemas/SlotDurationMinutes'
+        generatedAt:
+          allOf:
+            - $ref: '#/components/schemas/UtcTimestamp'
+          description: Серверное время расчета.
+        slots:
+          type: array
+          description: Слоты, отсортированные по `startsAt` по возрастанию.
+          maxItems: 1488
+          items:
+            $ref: '#/components/schemas/RescheduleSlot'
+
+    CreateBookingRequest:
+      type: object
+      description: |
+        Данные для создания бронирования. Передается только начало слота: конец
+        вычисляется системой как `startsAt + 30 минут` (правило B-2).
+      additionalProperties: false
+      required:
+        - startsAt
+        - guestName
+        - guestEmail
+      properties:
+        startsAt:
+          allOf:
+            - $ref: '#/components/schemas/SlotBoundary'
+          description: Начало выбранного слота в UTC.
+        guestName:
+          type: string
+          description: |
+            Имя гостя, 2–80 символов после обрезки пробелов; управляющие символы
+            запрещены (правило B-6).
+          minLength: 2
+          maxLength: 80
+          pattern: ^[^\u0000-\u001F\u007F]{2,80}$
+          examples:
+            - Alex Guest
+        guestEmail:
+          type: string
+          format: email
+          description: Email гостя, до 254 символов; верификация не выполняется (правила B-6, B-11).
+          minLength: 3
+          maxLength: 254
+          examples:
+            - guest@example.com
+        comment:
+          type: [string, 'null']
+          description: |
+            Необязательный комментарий гостя, до 500 символов и не более 10 строк
+            (правило B-6). Владельцу в MVP не показывается (правило R-10).
+          maxLength: 500
+          examples:
+            - Хочу обсудить миграцию на новый API.
+
+    BookingCreated:
+      type: object
+      description: |
+        Результат создания бронирования. Единственный ответ, в котором возвращается
+        открытый management token (правило M-4).
+      additionalProperties: false
+      required:
+        - id
+        - calendarId
+        - calendarSlug
+        - calendarTitle
+        - startsAt
+        - endsAt
+        - durationMinutes
+        - status
+        - createdAt
+        - managementToken
+        - managementPath
+      properties:
+        id:
+          $ref: '#/components/schemas/Uuid'
+        calendarId:
+          $ref: '#/components/schemas/Uuid'
+        calendarSlug:
+          $ref: '#/components/schemas/CalendarSlug'
+        calendarTitle:
+          type: string
+          minLength: 1
+          maxLength: 120
+          description: Заголовок календаря для экрана подтверждения.
+          examples:
+            - Консультация 30 минут
+        startsAt:
+          $ref: '#/components/schemas/SlotBoundary'
+        endsAt:
+          $ref: '#/components/schemas/SlotBoundary'
+        durationMinutes:
+          $ref: '#/components/schemas/SlotDurationMinutes'
+        status:
+          allOf:
+            - $ref: '#/components/schemas/BookingStatus'
+          description: Всегда `CONFIRMED` для только что созданного бронирования.
+        createdAt:
+          $ref: '#/components/schemas/UtcTimestamp'
+        managementToken:
+          $ref: '#/components/schemas/ManagementToken'
+        managementPath:
+          type: string
+          description: |
+            Относительный путь страницы управления без токена. Клиент строит полную
+            ссылку как `<frontend>/#<managementPath>#token=<managementToken>`, помещая
+            секрет во fragment (правило M-7).
+          pattern: ^/bookings/[0-9a-fA-F-]{36}$
+          maxLength: 128
+          examples:
+            - /bookings/8b6b8a2a-4a3e-4a63-9d0f-2f1a5c4b7e10
+
+    BookingCancellationView:
+      type: object
+      description: |
+        Минимальная карточка бронирования для страницы управления. Персональные
+        данные гостя намеренно отсутствуют (правило C-7).
+      additionalProperties: false
+      required:
+        - id
+        - calendarTitle
+        - startsAt
+        - endsAt
+        - durationMinutes
+        - status
+        - cancelledAt
+        - rescheduledAt
+        - cancellable
+      properties:
+        id:
+          $ref: '#/components/schemas/Uuid'
+        calendarTitle:
+          type: string
+          minLength: 1
+          maxLength: 120
+          description: Заголовок календаря.
+          examples:
+            - Консультация 30 минут
+        startsAt:
+          $ref: '#/components/schemas/SlotBoundary'
+        endsAt:
+          $ref: '#/components/schemas/SlotBoundary'
+        durationMinutes:
+          $ref: '#/components/schemas/SlotDurationMinutes'
+        status:
+          $ref: '#/components/schemas/BookingStatus'
+        cancelledAt:
+          oneOf:
+            - $ref: '#/components/schemas/UtcTimestamp'
+            - type: 'null'
+          description: |
+            Время отмены или `null`, если бронирование подтверждено. Повторная отмена
+            возвращает то же значение (правило C-2).
+        rescheduledAt:
+          oneOf:
+            - $ref: '#/components/schemas/UtcTimestamp'
+            - type: 'null'
+          description: Время последнего переноса или `null` (правило R-6).
+        cancellable:
+          type: boolean
+          description: |
+            `true`, если отмена сейчас допустима: статус `CONFIRMED` и начало встречи
+            строго в будущем (правило C-3).
+          examples:
+            - true
+
+    AvailabilityWindow:
+      type: object
+      description: Опубликованный интервал доступности, полуинтервал `[startsAt, endsAt)`.
+      additionalProperties: false
+      required:
+        - id
+        - startsAt
+        - endsAt
+        - createdAt
+      properties:
+        id:
+          $ref: '#/components/schemas/Uuid'
+        startsAt:
+          $ref: '#/components/schemas/SlotBoundary'
+        endsAt:
+          $ref: '#/components/schemas/SlotBoundary'
+        createdAt:
+          $ref: '#/components/schemas/UtcTimestamp'
+
+    AvailabilityWindowList:
+      type: object
+      description: |
+        Полный список интервалов доступности календаря. Пагинации нет: количество
+        интервалов ограничено правилом A-8.
+      additionalProperties: false
+      required:
+        - calendarId
+        - total
+        - maxWindows
+        - items
+      properties:
+        calendarId:
+          $ref: '#/components/schemas/Uuid'
+        total:
+          type: integer
+          description: Количество элементов в `items`; равно общему числу интервалов.
+          minimum: 0
+          maximum: 500
+          examples:
+            - 2
+        maxWindows:
+          type: integer
+          description: Лимит количества интервалов на календарь (правило A-8).
+          const: 500
+          examples:
+            - 500
+        items:
+          type: array
+          description: Интервалы, отсортированные по `startsAt` по возрастанию.
+          maxItems: 500
+          items:
+            $ref: '#/components/schemas/AvailabilityWindow'
+
+    CreateAvailabilityWindowRequest:
+      type: object
+      description: Границы нового интервала доступности в UTC.
+      additionalProperties: false
+      required:
+        - startsAt
+        - endsAt
+      properties:
+        startsAt:
+          $ref: '#/components/schemas/SlotBoundary'
+        endsAt:
+          allOf:
+            - $ref: '#/components/schemas/SlotBoundary'
+          description: Строго позже `startsAt`, не дальше чем на 14 дней (правила A-4, A-7).
+
+    OwnerBooking:
+      type: object
+      description: |
+        Представление встречи для владельца. Комментарий гостя не возвращается,
+        email маскируется (правило R-10).
+      additionalProperties: false
+      required:
+        - id
+        - startsAt
+        - endsAt
+        - durationMinutes
+        - status
+        - guestName
+        - guestEmailMasked
+        - createdAt
+        - rescheduledAt
+      properties:
+        id:
+          $ref: '#/components/schemas/Uuid'
+        startsAt:
+          $ref: '#/components/schemas/SlotBoundary'
+        endsAt:
+          $ref: '#/components/schemas/SlotBoundary'
+        durationMinutes:
+          $ref: '#/components/schemas/SlotDurationMinutes'
+        status:
+          $ref: '#/components/schemas/BookingStatus'
+        guestName:
+          type: string
+          minLength: 2
+          maxLength: 80
+          description: Имя гостя, необходимое владельцу для идентификации встречи.
+          examples:
+            - Alex Guest
+        guestEmailMasked:
+          type: string
+          description: |
+            Маскированный email: первый символ локальной части, `***` и домен.
+            Полный адрес owner-эндпоинты не раскрывают (правило R-10).
+          pattern: ^.\*\*\*@.+$
+          maxLength: 254
+          examples:
+            - g***@example.com
+        createdAt:
+          $ref: '#/components/schemas/UtcTimestamp'
+        rescheduledAt:
+          oneOf:
+            - $ref: '#/components/schemas/UtcTimestamp'
+            - type: 'null'
+          description: Время последнего переноса или `null` (правило R-6).
+
+    OwnerBookingList:
+      type: object
+      description: |
+        Будущие подтвержденные встречи. Пагинации нет: список ограничен горизонтом
+        бронирования и объемом опубликованной доступности.
+      additionalProperties: false
+      required:
+        - calendarId
+        - total
+        - generatedAt
+        - items
+      properties:
+        calendarId:
+          $ref: '#/components/schemas/Uuid'
+        total:
+          type: integer
+          description: Количество элементов в `items`.
+          minimum: 0
+          examples:
+            - 2
+        generatedAt:
+          allOf:
+            - $ref: '#/components/schemas/UtcTimestamp'
+          description: Серверное время формирования списка, относительно которого отобрано «будущее».
+        items:
+          type: array
+          description: Встречи, отсортированные по `startsAt` по возрастанию.
+          items:
+            $ref: '#/components/schemas/OwnerBooking'
+
+    RescheduleBookingRequest:
+      type: object
+      description: |
+        Новое начало встречи. Конец вычисляется системой как `startsAt + 30 минут`;
+        задать произвольную длительность нельзя (US-O5 AC8).
+      additionalProperties: false
+      required:
+        - startsAt
+      properties:
+        startsAt:
+          allOf:
+            - $ref: '#/components/schemas/SlotBoundary'
+          description: |
+            Новое начало слота в UTC. Совпадение с текущим временем встречи —
+            допустимый запрос, который ничего не меняет (правило R-8).
+
+    ErrorCode:
+      type: string
+      description: |
+        Стабильный машиночитаемый код ошибки. Клиенты обязаны ветвиться по нему,
+        а не по тексту `message` (правило N-14).
+
+        | Код | HTTP | Значение |
+        | --- | --- | --- |
+        | `MALFORMED_REQUEST` | 400 | Запрос синтаксически некорректен |
+        | `BOOKING_TOKEN_INVALID` | 403 | Токен отсутствует, неверен либо бронирования нет |
+        | `CALENDAR_NOT_FOUND` | 404 | Календарь не найден |
+        | `BOOKING_NOT_FOUND` | 404 | Бронирование не найдено (owner-операции) |
+        | `AVAILABILITY_WINDOW_NOT_FOUND` | 404 | Интервал доступности не найден |
+        | `SLOT_TAKEN` | 409 | Слот занят активным бронированием |
+        | `AVAILABILITY_OVERLAP` | 409 | Интервал пересекается с существующим |
+        | `AVAILABILITY_WINDOW_HAS_BOOKINGS` | 409 | В интервале есть будущие подтвержденные встречи |
+        | `IDEMPOTENCY_KEY_REUSED` | 409 | Ключ идемпотентности использован с другим телом |
+        | `BOOKING_ALREADY_STARTED` | 409 | Встреча уже началась, отмена неприменима |
+        | `BOOKING_NOT_RESCHEDULABLE` | 409 | Встреча отменена или уже началась |
+        | `VALIDATION_ERROR` | 422 | Значения нарушают продуктовые правила |
+        | `RATE_LIMITED` | 429 | Превышено ограничение частоты запросов |
+        | `INTERNAL_ERROR` | 500 | Непредвиденная ошибка сервера |
+      enum:
+        - MALFORMED_REQUEST
+        - BOOKING_TOKEN_INVALID
+        - CALENDAR_NOT_FOUND
+        - BOOKING_NOT_FOUND
+        - AVAILABILITY_WINDOW_NOT_FOUND
+        - SLOT_TAKEN
+        - AVAILABILITY_OVERLAP
+        - AVAILABILITY_WINDOW_HAS_BOOKINGS
+        - IDEMPOTENCY_KEY_REUSED
+        - BOOKING_ALREADY_STARTED
+        - BOOKING_NOT_RESCHEDULABLE
+        - VALIDATION_ERROR
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      examples:
+        - SLOT_TAKEN
+
+    ValidationDetail:
+      type: object
+      description: |
+        Описание одного нарушения. Предназначено для подсветки конкретного поля
+        формы и не содержит внутренних деталей реализации.
+      additionalProperties: false
+      required:
+        - location
+        - field
+        - message
+      properties:
+        location:
+          type: string
+          description: Часть запроса, в которой обнаружено нарушение.
+          enum:
+            - body
+            - query
+            - path
+            - header
+          examples:
+            - body
+        field:
+          type: string
+          description: |
+            Имя поля или параметра. Для вложенных полей используется точечная нотация,
+            для всего тела — `$`.
+          minLength: 1
+          maxLength: 128
+          examples:
+            - startsAt
+        rule:
+          type: string
+          description: |
+            Идентификатор нарушенного продуктового правила из `docs/product-requirements.md`
+            (например, `B-3`). Присутствует, когда нарушение соответствует именованному правилу.
+          pattern: ^[ASBCRTMNYK]-\d{1,2}$
+          examples:
+            - B-3
+        message:
+          type: string
+          description: Человекочитаемое объяснение нарушения на английском языке.
+          minLength: 1
+          maxLength: 300
+          examples:
+            - Slot must start at least 60 minutes from now.
+
+    Error:
+      type: object
+      description: |
+        Единый формат ошибки для всех операций (правило N-14). Возвращается с
+        `Content-Type: application/problem+json`.
+      additionalProperties: false
+      required:
+        - code
+        - message
+        - requestId
+        - timestamp
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        message:
+          type: string
+          description: |
+            Краткое человекочитаемое описание на английском языке. Не предназначено
+            для показа пользователю без локализации и не является стабильным контрактом.
+          minLength: 1
+          maxLength: 300
+          examples:
+            - The requested slot is no longer available.
+        details:
+          type: array
+          description: |
+            Перечень конкретных нарушений. Присутствует прежде всего у `VALIDATION_ERROR`,
+            но допустим у любой ошибки, когда есть что уточнить.
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/ValidationDetail'
+        retryAfterSeconds:
+          type: integer
+          description: |
+            Через сколько секунд имеет смысл повторить запрос. Заполняется для
+            `RATE_LIMITED` и дублирует заголовок `Retry-After`.
+          minimum: 1
+          examples:
+            - 30
+        requestId:
+          allOf:
+            - $ref: '#/components/schemas/Uuid'
+          description: |
+            Идентификатор запроса, совпадающий с заголовком `X-Request-Id` и записями
+            в логах. Пользователю показывается для обращения в поддержку (сценарий A19).
+        timestamp:
+          allOf:
+            - $ref: '#/components/schemas/UtcTimestamp'
+          description: Серверное время формирования ответа.
+
+    HealthCheck:
+      type: object
+      description: Состояние одной зависимости.
+      additionalProperties: false
+      required:
+        - name
+        - status
+      properties:
+        name:
+          type: string
+          description: Имя проверяемой зависимости.
+          enum:
+            - database
+            - messageBroker
+          examples:
+            - database
+        status:
+          type: string
+          description: Состояние зависимости.
+          enum:
+            - up
+            - down
+          examples:
+            - up
+
+    HealthStatus:
+      type: object
+      description: |
+        Агрегированное состояние сервиса. Не содержит персональных данных, секретов
+        и внутренних адресов (правило N-10, US-S2 AC1).
+      additionalProperties: false
+      required:
+        - status
+        - checks
+        - timestamp
+      properties:
+        status:
+          type: string
+          description: |
+            `up` — сервис работоспособен; `down` — обязательная зависимость недоступна.
+          enum:
+            - up
+            - down
+          examples:
+            - up
+        checks:
+          type: array
+          description: Состояния отдельных зависимостей; пустой массив для пробы живости.
+          maxItems: 10
+          items:
+            $ref: '#/components/schemas/HealthCheck'
+        timestamp:
+          $ref: '#/components/schemas/UtcTimestamp'

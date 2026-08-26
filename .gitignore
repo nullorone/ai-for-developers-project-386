@@ -1,3 +1,11 @@
 .vscode
 .idea
 .env
+
+# Dependencies (contract tooling in the root, frontend/ and backend/ later)
+node_modules/
+
+# Build and tooling output
+dist/
+coverage/
+*.log
