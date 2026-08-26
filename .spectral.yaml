@@ -1,0 +1,111 @@
+# Spectral ruleset for the Booking Call API contract.
+# Run: npm run lint:openapi
+extends:
+  - spectral:oas
+
+rules:
+  # --- Baseline rules raised to errors: the contract is the source of truth. ---
+  operation-operationId: error
+  operation-operationId-unique: error
+  operation-description: error
+  operation-tags: error
+  operation-tag-defined: error
+  oas3-valid-media-example: error
+  oas3-valid-schema-example: error
+  info-contact: error
+  info-description: error
+  tag-description: error
+
+  # --- Naming conventions ---
+  operation-operationId-valid-in-url: error
+
+  operation-id-camel-case:
+    description: operationId must be camelCase so generated clients get stable method names.
+    severity: error
+    given: $.paths[*][get,post,put,patch,delete].operationId
+    then:
+      function: pattern
+      functionOptions:
+        match: ^[a-z][a-zA-Z0-9]*$
+
+  schema-names-pascal-case:
+    description: Reusable schema names must be PascalCase.
+    severity: error
+    given: $.components.schemas
+    then:
+      field: '@key'
+      function: pattern
+      functionOptions:
+        match: ^[A-Z][a-zA-Z0-9]*$
+
+  # --- Project-specific invariants ---
+  no-token-in-path-or-query:
+    description: >-
+      Management token must never appear in path or query parameters (rule M-6);
+      it is passed only via the X-Booking-Token header.
+    severity: error
+    given: $.paths[*][*].parameters[?(@.in == 'path' || @.in == 'query')].name
+    then:
+      function: pattern
+      functionOptions:
+        notMatch: "[Tt][Oo][Kk][Ee][Nn]"
+
+  no-token-in-path-template:
+    description: Management token must never appear in a URL template (rule M-6).
+    severity: error
+    given: $.paths
+    then:
+      field: '@key'
+      function: pattern
+      functionOptions:
+        notMatch: "[Tt][Oo][Kk][Ee][Nn]"
+
+  object-schemas-are-closed:
+    description: >-
+      Object schemas must set additionalProperties, and normally to false, so DTOs
+      are closed against unexpected properties.
+    severity: error
+    given: $.components.schemas[?(@.type == 'object')]
+    then:
+      field: additionalProperties
+      function: defined
+
+  # Служебные пробы /health* исключены из трех правил ниже осознанно: они не входят
+  # в доменный API, отдают статус зависимостей вместо Error и не участвуют в
+  # корреляции пользовательских обращений.
+  error-responses-use-problem-json:
+    description: Every 4xx/5xx JSON response must use the unified problem+json error media type.
+    severity: warn
+    given: >-
+      $.paths[?(!@property.match(/^\/health/))][get,post,put,patch,delete].responses[?(@property.match(/^[45]/))].content
+    then:
+      field: application/json
+      function: undefined
+
+  responses-declare-request-id:
+    description: Every response must expose the X-Request-Id correlation header.
+    severity: warn
+    given: >-
+      $.paths[?(!@property.match(/^\/health/))][get,post,put,patch,delete].responses[*]
+    then:
+      field: headers.X-Request-Id
+      function: defined
+
+  every-operation-has-500:
+    description: Every operation must document the unified 500 error.
+    severity: warn
+    given: $.paths[?(!@property.match(/^\/health/))][get,post,put,patch,delete].responses
+    then:
+      field: '500'
+      function: defined
+
+  # --- Rules intentionally disabled ---
+  # The contract has no security schemes on purpose: there is no authentication
+  # in the MVP (ADR 0001). The only secret is the guest management token, which is
+  # a per-object capability passed in a header, not an auth scheme.
+  oas3-api-servers: error
+  operation-success-response: error
+  contact-properties: off
+  info-license: off
+  license-url: off
+  oas3-unused-component: error

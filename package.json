@@ -1,0 +1,28 @@
+{
+  "name": "booking-call-contract",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Contract tooling for the Booking Call API: OpenAPI lint, operationId check and Prism mock server. This is NOT a workspace root: frontend/ and backend/ stay independent projects with their own dependencies.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=20.6.0"
+  },
+  "scripts": {
+    "lint:openapi": "spectral lint openapi.yaml --ruleset .spectral.yaml --fail-severity warn --display-only-failures",
+    "lint:operation-ids": "node scripts/check-operation-ids.mjs openapi.yaml",
+    "lint": "npm run lint:openapi && npm run lint:operation-ids",
+    "mock": "prism mock openapi.yaml --port 4010 --host 127.0.0.1 --errors",
+    "mock:dynamic": "prism mock openapi.yaml --port 4010 --host 127.0.0.1 --errors --dynamic",
+    "smoke:mock": "node scripts/smoke-mock.mjs"
+  },
+  "overrides": {
+    "@stoplight/prism-http": "5.12.0",
+    "@stoplight/prism-http-server": "5.12.0"
+  },
+  "devDependencies": {
+    "@stoplight/prism-cli": "5.14.2",
+    "@stoplight/spectral-cli": "6.15.0",
+    "yaml": "2.8.1"
+  }
+}
