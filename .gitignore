@@ -1,11 +1,18 @@
 .vscode
 .idea
-.env
 
-# Dependencies (contract tooling in the root, frontend/ and backend/ later)
+# Локальные переменные окружения (в Git — только *.env.example)
+.env
+.env.*
+!.env.example
+
+# Dependencies (contract tooling in the root, frontend/ and backend/ — свои проекты)
 node_modules/
 
 # Build and tooling output
 dist/
+build/
 coverage/
 *.log
+*.tsbuildinfo
+.vite/

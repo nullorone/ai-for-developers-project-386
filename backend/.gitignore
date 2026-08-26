@@ -1,0 +1,14 @@
+node_modules/
+dist/
+coverage/
+*.log
+*.tsbuildinfo
+
+# Локальные переменные окружения
+.env
+.env.*
+!.env.example
+
+# Артефакты Prisma (клиент генерируется в node_modules командой prisma generate)
+prisma/*.db
+prisma/*.db-journal

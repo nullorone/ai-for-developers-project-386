@@ -1,0 +1,13 @@
+node_modules/
+dist/
+coverage/
+*.log
+
+# Локальные переменные окружения
+.env
+.env.*
+!.env.example
+
+# Код, генерируемый из корневого openapi.yaml (npm run api:generate)
+src/shared/api/generated/*
+!src/shared/api/generated/README.md
