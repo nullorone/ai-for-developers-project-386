@@ -49,6 +49,7 @@ export class AvailabilityRepository {
 
   async deleteAtomic(calendarId: string, windowId: string, now: Date): Promise<DeleteWindowResult> {
     return this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`calendar:${calendarId}`}, 0))`;
       const window = await tx.availabilityWindow.findFirst({
         where: { id: windowId, calendarId },
         select: { id: true, startsAt: true, endsAt: true },

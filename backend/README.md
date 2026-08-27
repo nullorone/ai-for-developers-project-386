@@ -52,6 +52,7 @@ curl -s http://localhost:3000/api/v1/health/live
 | `PORT` | `3000` | Порт HTTP-сервера |
 | `API_PREFIX` | `api/v1` | Глобальный префикс из контракта |
 | `DATABASE_URL` | — (обязательна) | Строка подключения PostgreSQL |
+| `IDEMPOTENCY_ENCRYPTION_KEY` | — (обязательна) | 32-byte hex key для AES-GCM ответа идемпотентности |
 | `CORS_ORIGINS` | `http://localhost:5173,http://localhost:4173` | Разрешенные origin через запятую или `*` |
 | `LOG_LEVEL` | `log` | `error` \| `warn` \| `log` \| `debug` \| `verbose` |
 
@@ -84,7 +85,7 @@ src/
 ├── availability/       # owner CRUD, validation и persistence boundary
 ├── slots/              # чистая генерация и публичный slots endpoint
 ├── owner/              # будущие встречи и read endpoint слотов переноса
-├── bookings/           # команды бронирования приходят на этапе 6
+├── bookings/           # create/cancellation, token security, idempotency и rate limit
 ├── messaging/          # publisher приходит на этапе 7
 ├── notifications/      # consumer приходит на этапе 7
 ├── bootstrap.ts        # единая настройка приложения для main.ts и e2e-тестов
@@ -108,3 +109,11 @@ test/                   # smoke-тест health и подготовка окру
 Логи запросов намеренно не содержат headers, body или query: management token и персональные
 данные не логируются. Для 5xx пишутся только request id, HTTP method, безопасный path и stack;
 наружу внутреннее сообщение не возвращается.
+
+## Транзакционный lifecycle
+
+Create, guest cancellation и owner reschedule реализованы по
+[`ADR 0003`](../docs/adr/0003-booking-transaction-and-idempotency.md). Active slot защищен
+partial unique index PostgreSQL, а Booking/reservation/outbox меняются одной транзакцией.
+`Idempotency-Key` хранится только как SHA-256; воспроизводимый 24 часа ответ зашифрован
+AES-256-GCM. RabbitMQ на этапе 6 не подключен.

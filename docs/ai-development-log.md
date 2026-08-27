@@ -413,3 +413,43 @@ RabbitMQ, outbox publisher, notification consumer и команды создан
 ### Следующий этап
 
 Этап 6 — жизненный цикл бронирования (`llm/06-booking-lifecycle.md`).
+
+## Этап 6. Надежный жизненный цикл бронирования
+
+### Задача и подход
+
+Реализованы create, guest cancellation, получение минимальной cancellation card и owner
+reschedule. Booking, SlotReservation и соответствующий `booking.*` OutboxEvent изменяются
+одной интерактивной Prisma-транзакцией; RabbitMQ не подключался. Partial unique index активного
+слота остается окончательной защитой гонок, а database unique violation отображается в
+`409 SLOT_TAKEN`. Advisory transaction locks стабилизируют повторы одной команды и согласуют
+изменения с availability.
+
+Management token генерируется из 32 случайных байт, в Booking хранится только SHA-256,
+сравнение выполняется constant-time. Для контрактного повтора create полный первый ответ
+хранится 24 часа в AES-256-GCM ciphertext в `IdempotencyRecord`; ключ и Idempotency-Key
+в базе отсутствуют в открытом виде. Token endpoints защищены rate limit, а logging policy
+по-прежнему не пишет headers/body/query.
+
+### Проверки
+
+- ESLint, TypeScript, Prettier, Jest unit suite и production build.
+- PostgreSQL 16: обе миграции и seed; API/integration tests create, replay, key reuse,
+  cancellation details, повторную отмену, освобождение слота, перенос и no-op.
+- Concurrency: восемь create одного слота, два reschedule в один слот, create одновременно
+  с reschedule. Во всех случаях в целевом времени остается одна active reservation.
+- Искусственная ошибка trigger при `booking.rescheduled` outbox insert дала `500`; проверено,
+  что Booking и исходная reservation полностью восстановлены, а события нет.
+- SQL-проверки не обнаружили orphan reservation или дубликатов доменных событий.
+
+### Риски и ограничения
+
+- Rate limiter локален одному процессу NestJS; при горизонтальном масштабировании нужен общий
+  storage или ingress limiter. Для текущего single-process MVP это соответствует архитектуре.
+- Просроченные idempotency records не воспроизводятся и удаляются при повторе ключа; для
+  ограничения физического размера таблицы нужен периодический cleanup по `expires_at`.
+- RabbitMQ publisher и consumer намеренно остаются этапом 7; outbox records уже атомарны.
+
+### Следующий этап
+
+Этап 7 — RabbitMQ publisher, retry/DLQ и идемпотентный consumer (`llm/07-rabbitmq-outbox.md`).

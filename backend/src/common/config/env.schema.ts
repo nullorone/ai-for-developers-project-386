@@ -29,6 +29,11 @@ export const envSchema = z.object({
       message: 'DATABASE_URL должен быть postgres:// или postgresql:// URL',
     }),
 
+  /** 32-byte key used only for the short-lived encrypted idempotency response. */
+  IDEMPOTENCY_ENCRYPTION_KEY: z
+    .string()
+    .regex(/^[0-9a-fA-F]{64}$/, 'IDEMPOTENCY_ENCRYPTION_KEY должен содержать 64 hex-символа'),
+
   /** Список разрешенных origin через запятую или `*` для локальной разработки. */
   CORS_ORIGINS: z.string().min(1).default('http://localhost:5173,http://localhost:4173'),
 

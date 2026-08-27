@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 
 import { CalendarsModule } from '../calendars/calendars.module';
+import { BookingsModule } from '../bookings/bookings.module';
 import { SlotsModule } from '../slots/slots.module';
 import { OwnerController } from './owner.controller';
 import { OwnerRepository } from './owner.repository';
@@ -13,7 +14,7 @@ import { OwnerService } from './owner.service';
  * и бизнес-логики не содержит — они появляются на этапе 6.
  */
 @Module({
-  imports: [CalendarsModule, SlotsModule],
+  imports: [CalendarsModule, SlotsModule, BookingsModule],
   controllers: [OwnerController],
   providers: [OwnerRepository, OwnerService],
 })

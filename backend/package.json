@@ -25,7 +25,7 @@
     "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\"",
     "pretest": "npm run prisma:generate",
     "test": "jest --runInBand",
-    "test:integration": "RUN_DATABASE_TESTS=true jest --runInBand test/database.integration.e2e-spec.ts",
+    "test:integration": "RUN_DATABASE_TESTS=true jest --runInBand --testPathPattern=integration.e2e-spec.ts",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage --runInBand"
   },

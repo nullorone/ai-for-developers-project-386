@@ -1,6 +1,7 @@
-import { Controller, Get, Param, ParseUUIDPipe, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Query } from '@nestjs/common';
 
-import type { OwnerBookingListDto, RescheduleSlotListDto } from './owner.types';
+import type { OwnerBookingDto, OwnerBookingListDto, RescheduleSlotListDto } from './owner.types';
+import { RescheduleBookingDto } from './reschedule-booking.dto';
 import { RescheduleRangeDto } from './reschedule-range.dto';
 import { OwnerService } from './owner.service';
 
@@ -19,5 +20,13 @@ export class OwnerController {
     @Query() range: RescheduleRangeDto,
   ): Promise<RescheduleSlotListDto> {
     return this.owner.listRescheduleSlots(bookingId, range);
+  }
+
+  @Patch(':bookingId/schedule')
+  reschedule(
+    @Param('bookingId', new ParseUUIDPipe()) bookingId: string,
+    @Body() input: RescheduleBookingDto,
+  ): Promise<OwnerBookingDto> {
+    return this.owner.reschedule(bookingId, input);
   }
 }

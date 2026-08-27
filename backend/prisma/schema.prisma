@@ -43,6 +43,7 @@ model Calendar {
   availabilityWindows    AvailabilityWindow[]
   bookings               Booking[]
   slotReservations       SlotReservation[]
+  idempotencyRecords     IdempotencyRecord[]
 
   @@map("calendars")
 }
@@ -128,4 +129,22 @@ model NotificationLog {
 
   @@index([status, createdAt], map: "notification_status_idx")
   @@map("notification_logs")
+}
+
+model IdempotencyRecord {
+  id                 String   @id @default(uuid()) @db.Uuid
+  calendarId         String   @map("calendar_id") @db.Uuid
+  operation          String   @db.VarChar(64)
+  keyHash            String   @map("key_hash") @db.Char(64)
+  requestHash        String   @map("request_hash") @db.Char(64)
+  responseCiphertext String   @map("response_ciphertext") @db.Text
+  responseIv         String   @map("response_iv") @db.VarChar(32)
+  responseAuthTag    String   @map("response_auth_tag") @db.VarChar(32)
+  expiresAt          DateTime @map("expires_at") @db.Timestamptz(0)
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(0)
+  calendar           Calendar @relation(fields: [calendarId], references: [id], onDelete: Cascade)
+
+  @@unique([calendarId, operation, keyHash], name: "idempotencyScopeKey", map: "idempotency_scope_key")
+  @@index([expiresAt], map: "idempotency_expiry_idx")
+  @@map("idempotency_records")
 }
