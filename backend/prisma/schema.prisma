@@ -1,10 +1,3 @@
-// Схема данных сервиса «Запись на звонок».
-//
-// Этап 3 — только каркас: подключение Prisma и PostgreSQL без моделей.
-// Модели `Calendar`, `AvailabilityWindow`, `Booking`, `SlotReservation`,
-// `OutboxEvent` и `NotificationLog`, их индексы и ограничения проектируются
-// на этапе 5 (`llm/05-backend-core.md`).
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -12,4 +5,127 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+}
+
+enum BookingStatus {
+  CONFIRMED
+  CANCELLED
+}
+
+enum ReservationStatus {
+  ACTIVE
+  RELEASED
+}
+
+enum OutboxStatus {
+  PENDING
+  PUBLISHED
+  FAILED
+}
+
+enum NotificationStatus {
+  PROCESSING
+  SENT
+  FAILED
+}
+
+model Calendar {
+  id                     String               @id @default(uuid()) @db.Uuid
+  slug                   String               @unique @db.VarChar(64)
+  title                  String               @db.VarChar(120)
+  description            String?              @db.VarChar(1000)
+  ownerTimeZone          String               @map("owner_time_zone") @db.VarChar(64)
+  slotDurationMinutes    Int                  @default(30) @map("slot_duration_minutes")
+  minimumLeadTimeMinutes Int                  @default(60) @map("minimum_lead_time_minutes")
+  bookingHorizonDays     Int                  @default(90) @map("booking_horizon_days")
+  createdAt              DateTime             @default(now()) @map("created_at") @db.Timestamptz(0)
+  updatedAt              DateTime             @updatedAt @map("updated_at") @db.Timestamptz(0)
+  availabilityWindows    AvailabilityWindow[]
+  bookings               Booking[]
+  slotReservations       SlotReservation[]
+
+  @@map("calendars")
+}
+
+model AvailabilityWindow {
+  id         String   @id @default(uuid()) @db.Uuid
+  calendarId String   @map("calendar_id") @db.Uuid
+  startsAt   DateTime @map("starts_at") @db.Timestamptz(0)
+  endsAt     DateTime @map("ends_at") @db.Timestamptz(0)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(0)
+  calendar   Calendar @relation(fields: [calendarId], references: [id], onDelete: Cascade)
+
+  @@index([calendarId, startsAt, endsAt], map: "availability_calendar_range_idx")
+  @@map("availability_windows")
+}
+
+model Booking {
+  id                  String            @id @default(uuid()) @db.Uuid
+  calendarId          String            @map("calendar_id") @db.Uuid
+  startsAt            DateTime          @map("starts_at") @db.Timestamptz(0)
+  endsAt              DateTime          @map("ends_at") @db.Timestamptz(0)
+  status              BookingStatus     @default(CONFIRMED)
+  guestName           String            @map("guest_name") @db.VarChar(80)
+  guestEmail          String            @map("guest_email") @db.VarChar(254)
+  comment             String?           @db.VarChar(500)
+  managementTokenHash String            @unique @map("management_token_hash") @db.Char(64)
+  cancelledAt         DateTime?         @map("cancelled_at") @db.Timestamptz(0)
+  rescheduledAt       DateTime?         @map("rescheduled_at") @db.Timestamptz(0)
+  createdAt           DateTime          @default(now()) @map("created_at") @db.Timestamptz(0)
+  updatedAt           DateTime          @updatedAt @map("updated_at") @db.Timestamptz(0)
+  calendar            Calendar          @relation(fields: [calendarId], references: [id], onDelete: Restrict)
+  reservations        SlotReservation[]
+
+  @@index([calendarId, status, startsAt], map: "booking_owner_list_idx")
+  @@map("bookings")
+}
+
+model SlotReservation {
+  id         String            @id @default(uuid()) @db.Uuid
+  calendarId String            @map("calendar_id") @db.Uuid
+  bookingId  String            @map("booking_id") @db.Uuid
+  startsAt   DateTime          @map("starts_at") @db.Timestamptz(0)
+  status     ReservationStatus @default(ACTIVE)
+  releasedAt DateTime?         @map("released_at") @db.Timestamptz(0)
+  createdAt  DateTime          @default(now()) @map("created_at") @db.Timestamptz(0)
+  calendar   Calendar          @relation(fields: [calendarId], references: [id], onDelete: Restrict)
+  booking    Booking           @relation(fields: [bookingId], references: [id], onDelete: Restrict)
+
+  @@index([calendarId, status, startsAt], map: "reservation_slot_query_idx")
+  @@index([bookingId, status], map: "reservation_booking_idx")
+  @@map("slot_reservations")
+}
+
+model OutboxEvent {
+  id            String       @id @default(uuid()) @db.Uuid
+  aggregateType String       @map("aggregate_type") @db.VarChar(64)
+  aggregateId   String       @map("aggregate_id") @db.Uuid
+  eventType     String       @map("event_type") @db.VarChar(128)
+  payload       Json
+  status        OutboxStatus @default(PENDING)
+  attempts      Int          @default(0)
+  availableAt   DateTime     @default(now()) @map("available_at") @db.Timestamptz(0)
+  publishedAt   DateTime?    @map("published_at") @db.Timestamptz(0)
+  lastError     String?      @map("last_error") @db.Text
+  createdAt     DateTime     @default(now()) @map("created_at") @db.Timestamptz(0)
+
+  @@index([status, availableAt, createdAt], map: "outbox_pending_idx")
+  @@map("outbox_events")
+}
+
+model NotificationLog {
+  id          String             @id @default(uuid()) @db.Uuid
+  eventId     String             @unique @map("event_id") @db.Uuid
+  eventType   String             @map("event_type") @db.VarChar(128)
+  bookingId   String             @map("booking_id") @db.Uuid
+  recipient   String             @db.VarChar(254)
+  status      NotificationStatus @default(PROCESSING)
+  attempts    Int                @default(0)
+  lastError   String?            @map("last_error") @db.Text
+  processedAt DateTime?          @map("processed_at") @db.Timestamptz(0)
+  createdAt   DateTime           @default(now()) @map("created_at") @db.Timestamptz(0)
+  updatedAt   DateTime           @updatedAt @map("updated_at") @db.Timestamptz(0)
+
+  @@index([status, createdAt], map: "notification_status_idx")
+  @@map("notification_logs")
 }

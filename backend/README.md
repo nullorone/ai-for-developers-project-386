@@ -8,7 +8,7 @@ lockfile, скрипты и тесты. Реализация обязана со
 ## Требования
 
 - Node.js `>=20.6.0` (проверено на 20.6.1), npm 9+.
-- PostgreSQL — только для готовности к трафику. Каркас поднимается и без базы:
+- PostgreSQL 16+. HTTP-процесс поднимается и без базы:
   соединение Prisma ленивое, `/health/live` всегда отвечает `200`,
   а `/health` и `/health/ready` честно возвращают `503`, пока база недоступна.
 
@@ -18,6 +18,8 @@ lockfile, скрипты и тесты. Реализация обязана со
 cd backend
 cp .env.example .env
 npm install          # postinstall выполняет prisma generate
+npm run prisma:migrate
+npm run prisma:seed
 npm run start:dev    # http://localhost:3000/api/v1
 curl -s http://localhost:3000/api/v1/health/live
 ```
@@ -27,6 +29,7 @@ curl -s http://localhost:3000/api/v1/health/live
 | Команда | Что делает |
 | --- | --- |
 | `npm run prisma:generate` | Генерирует Prisma Client (в `node_modules`) |
+| `npm run prisma:migrate` / `prisma:seed` | Применяет миграции / идемпотентно создает календарь `demo` |
 | `npm run build` | `nest build` → `dist/` |
 | `npm start` | `node dist/main.js` (требует предварительный `build`) |
 | `npm run start:dev` | Watch-режим |
@@ -34,6 +37,7 @@ curl -s http://localhost:3000/api/v1/health/live
 | `npm run lint` | ESLint с типизированными правилами, `--max-warnings=0` |
 | `npm run format` / `format:check` | Prettier |
 | `npm test` | Jest: unit-тесты `src/**/*.spec.ts` и smoke-тест `test/*.e2e-spec.ts` |
+| `npm run test:integration` | PostgreSQL integration tests; требует доступную тестовую `DATABASE_URL` |
 | `npm run test:cov` | Отчет о покрытии |
 
 ## Переменные окружения
@@ -71,18 +75,18 @@ curl -s http://localhost:3000/api/v1/health/live
 ## Структура
 
 ```text
-prisma/                 # schema.prisma: пока только generator и datasource
+prisma/                 # доменная schema, SQL migration и идемпотентный seed
 src/
 ├── common/             # контрактные типы, конфигурация, фильтр ошибок, request id, валидация
 ├── prisma/             # PrismaService (ленивое соединение) и глобальный PrismaModule
 ├── health/             # пробы работоспособности
-├── calendars/          # ┐
-├── availability/       # │
-├── slots/              # │ заготовки доменных модулей из llm/00-project-overview.md:
-├── bookings/           # │ зарегистрированы, но без контроллеров и бизнес-логики
-├── owner/              # │
-├── messaging/          # │
-├── notifications/      # ┘
+├── calendars/          # публичный read endpoint и repository
+├── availability/       # owner CRUD, validation и persistence boundary
+├── slots/              # чистая генерация и публичный slots endpoint
+├── owner/              # будущие встречи и read endpoint слотов переноса
+├── bookings/           # команды бронирования приходят на этапе 6
+├── messaging/          # publisher приходит на этапе 7
+├── notifications/      # consumer приходит на этапе 7
 ├── bootstrap.ts        # единая настройка приложения для main.ts и e2e-тестов
 └── main.ts
 test/                   # smoke-тест health и подготовка окружения тестов
@@ -90,14 +94,17 @@ test/                   # smoke-тест health и подготовка окру
 
 ## Prisma и PostgreSQL
 
-`prisma/schema.prisma` содержит только `generator` и `datasource` с провайдером
-`postgresql`. Отдельный пакет `pg` не нужен: Prisma Client работает через собственный
-движок запросов. Модели `Calendar`, `AvailabilityWindow`, `Booking`, `SlotReservation`,
-`OutboxEvent`, `NotificationLog`, миграции и реальная проверка базы в `/health/ready`
-проектируются на этапе 5.
+Схема содержит `Calendar`, `AvailabilityWindow`, `Booking`, `SlotReservation`,
+`OutboxEvent` и `NotificationLog`. Ограничения, которые Prisma не выражает (GiST exclusion
+для окон и partial unique indexes активных reservations), находятся в SQL migration и
+описаны в [`docs/data-model.md`](../docs/data-model.md).
 
 ## Тесты
 
-Jest + Supertest, без внешних зависимостей: PostgreSQL не поднимается, `PrismaService`
-подменяется заглушкой. Интеграционные тесты с реальной базой (Testcontainers)
-приходят на этапе 5.
+Обычный `npm test` запускает unit/e2e без обязательной базы; database suite пропускается.
+Для реального PostgreSQL задайте тестовую (не production) `DATABASE_URL` и выполните
+`npm run prisma:migrate && npm run prisma:seed && npm run test:integration`.
+
+Логи запросов намеренно не содержат headers, body или query: management token и персональные
+данные не логируются. Для 5xx пишутся только request id, HTTP method, безопасный path и stack;
+наружу внутреннее сообщение не возвращается.

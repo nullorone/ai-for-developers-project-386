@@ -5,6 +5,7 @@ import { AvailabilityModule } from './availability/availability.module';
 import { BookingsModule } from './bookings/bookings.module';
 import { CalendarsModule } from './calendars/calendars.module';
 import { validateEnv } from './common/config/env.schema';
+import { ClockModule } from './common/time/clock.module';
 import { HealthModule } from './health/health.module';
 import { MessagingModule } from './messaging/messaging.module';
 import { NotificationsModule } from './notifications/notifications.module';
@@ -20,6 +21,7 @@ import { SlotsModule } from './slots/slots.module';
       validate: validateEnv,
     }),
     PrismaModule,
+    ClockModule,
     HealthModule,
     // Заготовки доменных модулей из llm/00-project-overview.md.
     CalendarsModule,

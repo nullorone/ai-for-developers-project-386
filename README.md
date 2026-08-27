@@ -13,9 +13,9 @@
 
 ## Статус
 
-Этап 4 из 13: весь frontend MVP реализован поверх OpenAPI mock API: публичные слоты,
-бронирование, защищенная отмена, owner-доступность и перенос. Backend-бизнес-логика,
-RabbitMQ и Docker еще не реализованы — см.
+Этап 5 из 13: frontend MVP работает поверх OpenAPI mock API; backend содержит PostgreSQL
+модель, доступность, расчет слотов и read endpoints. Транзакционные команды бронирования,
+RabbitMQ и эксплуатационный Docker Compose приходят на следующих этапах — см.
 [`llm/README.md`](llm/README.md).
 
 ## Структура репозитория
@@ -40,7 +40,7 @@ RabbitMQ и Docker еще не реализованы — см.
 
 - Node.js `>=20.6.0`; проверено на **Node 20.6.1 / npm 9.8.1**.
 - npm 9+ (по одному lockfile на каждый проект).
-- PostgreSQL — понадобится с этапа 5; каркас backend запускается и без базы.
+- PostgreSQL 16+ нужен для доменных endpoints; `/health/live` доступен и без базы.
 - Docker не требуется: локальный запуск полностью работает без него.
 
 ## Локальный запуск без Docker
@@ -61,6 +61,8 @@ npm run mock          # Prism mock API на http://127.0.0.1:4010
 cd backend
 cp .env.example .env          # при необходимости поправьте DATABASE_URL
 npm install                   # postinstall выполнит prisma generate
+npm run prisma:migrate
+npm run prisma:seed           # повторный запуск безопасен
 npm run start:dev             # http://localhost:3000/api/v1
 
 curl -s http://localhost:3000/api/v1/health/live
@@ -135,6 +137,7 @@ cd frontend && npm run api:generate   # → src/shared/api/generated/schema.d.ts
 
 - [Продуктовые требования](docs/product-requirements.md)
 - [Контракт API: структура, lint и mock](docs/api.md)
+- [Модель данных и ER diagram](docs/data-model.md)
 - [ADR 0001. Scope MVP и базовая архитектура](docs/adr/0001-mvp-scope-and-architecture.md)
 - [ADR 0002. Решения API-контракта](docs/adr/0002-api-contract-decisions.md)
 - [Журнал LLM-разработки](docs/ai-development-log.md)

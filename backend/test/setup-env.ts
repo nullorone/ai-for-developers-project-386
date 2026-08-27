@@ -14,4 +14,6 @@ export const TEST_ENV = {
   LOG_LEVEL: 'error',
 } as const;
 
-Object.assign(process.env, TEST_ENV);
+for (const [key, value] of Object.entries(TEST_ENV)) {
+  process.env[key] ??= value;
+}

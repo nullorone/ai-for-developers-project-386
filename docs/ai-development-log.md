@@ -364,3 +364,52 @@ TypeScript непосредственно против сгенерирован�
 ### Следующий этап
 
 Этап 5 — PostgreSQL и основной backend (`llm/05-backend-core.md`).
+
+## Этап 5. PostgreSQL и основной backend
+
+### Задача и подход
+
+Спроектирована Prisma-модель календаря, доступности, бронирований, исторических резерваций,
+outbox и журнала уведомлений. Начальная SQL migration дополняет возможности Prisma: GiST
+exclusion constraint атомарно запрещает пересекающиеся окна, а partial unique indexes
+гарантируют единственную активную резервацию слота и бронирования. Seed календаря `demo`
+использует `upsert` и фиксированный UUID.
+
+Prisma изолирован repository-классами. Реализованы calendar read, owner CRUD доступности,
+публичный slots endpoint, owner list будущих встреч и read endpoint слотов переноса.
+Контроллеры работают только с DTO, правила находятся в services, а расчет 30-минутных
+слотов — чистый UTC domain service. Системное время заменено injectable `Clock`.
+
+ValidationPipe различает отсутствующее обязательное значение (`400 MALFORMED_REQUEST`)
+и нарушение значения (`422 VALIDATION_ERROR`), запрещает неизвестные поля и передает
+корректную location (`body/query/path`) единому error mapper. Logging policy не пишет
+headers/body/query, management token и персональные поля.
+
+### Модель и constraints
+
+- Booking сохраняется при отмене и переносе; `cancelledAt` и `rescheduledAt` поддерживают историю.
+- `SlotReservation` имеет состояния `ACTIVE/RELEASED`; partial unique invariant подготовлен
+  для транзакционных команд этапа 6 без небезопасного `find` перед `insert`.
+- Границы и длительности проверяются CHECK constraints в UTC, окна ограничены 14 днями.
+- Индексы покрывают owner list, availability range и active reservation slot query.
+- Подробная ER diagram и объяснение SQL-only ограничений: [`data-model.md`](data-model.md).
+
+### Проверки
+
+- PostgreSQL 16 поднят с чистой базой; `prisma migrate deploy` применил единственную migration.
+- `prisma db seed` успешно выполнен дважды.
+- Unit tests покрывают генерацию, lead time, reservations, полуинтервалы, диапазон 31/90 дней,
+  overlap mapping и UTC/DST при измененной `TZ` процесса.
+- PostgreSQL integration suite проверяет adjacency/overlap на repository и constraint уровнях,
+  active/released reservations, реальные HTTP DTO/CRUD и допустимое использование индексов
+  через `EXPLAIN`.
+- OpenAPI не изменялся: существующий контракт оказался достаточным.
+
+### Осознанные границы этапа
+
+RabbitMQ, outbox publisher, notification consumer и команды создания/отмены/переноса
+бронирований не реализованы — это scope этапов 6 и 7. Таблицы под них уже готовы.
+
+### Следующий этап
+
+Этап 6 — жизненный цикл бронирования (`llm/06-booking-lifecycle.md`).
