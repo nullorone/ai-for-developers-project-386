@@ -8,7 +8,9 @@ export function createQueryClient(): QueryClient {
         // поэтому кэш держим коротким и не перезапрашиваем на каждый фокус.
         staleTime: 30_000,
         refetchOnWindowFocus: false,
-        retry: 1,
+        // Все error-состояния дают явную кнопку повтора; скрытая задержка перед
+        // показом ошибки ухудшает обратную связь и может дублировать нагрузку.
+        retry: false,
       },
       mutations: {
         // Мутации контракта не идемпотентны без Idempotency-Key (правило B-7):

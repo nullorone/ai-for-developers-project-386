@@ -17,6 +17,9 @@ export function createApiClient(baseUrl: string = appConfig.apiBaseUrl): ApiClie
   return createClient<paths>({
     baseUrl,
     headers: { Accept: 'application/json' },
+    // Не захватываем глобальный fetch при импорте модуля: contract mock тестов
+    // подменяет транспорт до выполнения запроса, production использует browser fetch.
+    fetch: (request) => globalThis.fetch(request),
   });
 }
 

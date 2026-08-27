@@ -15,7 +15,7 @@ function renderAt(path: string) {
 describe('маршрутизация', () => {
   it('показывает стартовую страницу на корневом маршруте', async () => {
     renderAt('/');
-    expect(await screen.findByRole('heading', { name: /каркас приложения готов/i })).toBeVisible();
+    expect(await screen.findByRole('heading', { name: /выберите удобное время/i })).toBeVisible();
   });
 
   it('показывает страницу 404 на неизвестном маршруте', async () => {

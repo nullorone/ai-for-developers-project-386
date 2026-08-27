@@ -1,21 +1,22 @@
-import { appConfig } from '../../shared/config/env';
+import { Link } from 'react-router-dom';
 
 export function HomePage() {
   return (
-    <section className="stack">
-      <h1>Каркас приложения готов</h1>
-      <p className="muted">
-        Это нейтральная стартовая страница. Продуктовые сценарии гостя и владельца реализуются на
-        следующем этапе поверх контракта <code>openapi.yaml</code>.
+    <section className="hero stack stack--large">
+      <p className="eyebrow">30 минут на важный разговор</p>
+      <h1>Выберите удобное время без переписки</h1>
+      <p className="lead">
+        Гость бронирует свободный слот, а владелец публикует доступность и управляет будущими
+        встречами.
       </p>
-      <dl className="stack">
-        <div>
-          <dt className="muted">Базовый адрес API</dt>
-          <dd>
-            <code>{appConfig.apiBaseUrl}</code>
-          </dd>
-        </div>
-      </dl>
+      <div className="actions">
+        <Link className="button button--inline" to="/calendars/demo">
+          Открыть календарь
+        </Link>
+        <Link className="button button--secondary button--inline" to="/owner/availability">
+          Управлять календарем
+        </Link>
+      </div>
     </section>
   );
 }
