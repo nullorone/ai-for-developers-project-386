@@ -315,3 +315,52 @@ cd backend  && npm install && npm run lint && npm run typecheck && npm test && n
 ### Следующий этап
 
 Этап 4 — frontend на mock API ([`llm/04-frontend-mocks.md`](../llm/04-frontend-mocks.md)).
+
+## Этап 4. Frontend на mock API
+
+### Задача и подход
+
+Реализован весь MVP-интерфейс независимо от backend, через тонкий типизированный адаптер над
+`openapi-fetch`. DTO берутся только из генерируемой OpenAPI-схемы. Добавлены hash-маршруты
+публичного календаря, подтверждения, защищенной отмены, owner-доступности, списка встреч и
+переноса. Даты вводятся и показываются локально, а транспорт всегда использует UTC `Z`.
+
+Management token остается в состоянии перехода/fragment URL, не сохраняется в browser storage
+и передается API исключительно как `X-Booking-Token`. При `409` список слотов инвалидируется;
+перенос не оптимистический, поэтому неуспешный запрос не меняет исходную встречу в UI.
+
+Вместо тяжелого календаря использованы нативный date input и доступные radio-группы слотов.
+Формы имеют labels, zod-валидацию, состояния loading/empty/error/conflict/success, live regions
+и управление фокусом. Адаптивность обеспечена CSS grid и переходом в одну колонку.
+
+### Mock layer и тесты
+
+Добавлен stateful contract-aligned mock `frontend/tests/mockApi.ts`: все fixtures проверяются
+TypeScript непосредственно против сгенерированных OpenAPI DTO. Он воспроизводит happy paths,
+пустые ответы, `500` и `409`; реальные персональные данные не используются. Интеграционные
+тесты проверяют создание, отмену, отсутствие токена в storage, conflict-refresh, owner CRUD и
+неизменность исходного времени при неуспешном переносе. Timezone unit-тест сравнивает
+`Europe/Moscow` и `America/New_York`.
+
+### Выполненные проверки
+
+- `frontend`: ESLint и TypeScript — без ошибок; Vitest — 15 тестов в 5 файлах, все зеленые;
+  production build собран без запущенного mock server (367.66 kB / 113.39 kB gzip);
+  Prettier check — без замечаний.
+- Корневой OpenAPI lint — без предупреждений; проверены 14 уникальных `operationId` и 28 схем.
+- Prism smoke — 24 проверки: guest/owner happy paths, `403/404/409/422/429/500/503`,
+  обязательный token header и запрет неизвестных DTO-полей.
+- Статический поиск не нашел `console.*` в коде приложения и project snapshot-файлов;
+  интеграционный тест подтверждает пустые `localStorage` и `sessionStorage` после бронирования.
+- `git diff --check` — без ошибок пробелов.
+
+### Риски и ограничения
+
+- Prism — stateless example server: межзапросные изменения состояния достоверно проверяются
+  stateful mock layer, а Prism smoke подтверждает соответствие запросов самому контракту.
+- Нативные date/datetime-local визуально различаются между браузерами; visual regression пока нет.
+- Owner-раздел остается публичным по scope MVP и неприемлем для production.
+
+### Следующий этап
+
+Этап 5 — PostgreSQL и основной backend (`llm/05-backend-core.md`).

@@ -4,12 +4,12 @@ import { describe, expect, it } from 'vitest';
 import { App } from '../src/app/App';
 import { apiClient } from '../src/shared/api/client';
 
-describe('smoke: каркас приложения', () => {
-  it('рендерит нейтральную стартовую страницу', async () => {
+describe('smoke: приложение', () => {
+  it('рендерит стартовую страницу MVP', async () => {
     render(<App />);
 
-    expect(await screen.findByRole('heading', { name: /каркас приложения готов/i })).toBeVisible();
-    expect(screen.getByText(/запись на звонок/i)).toBeVisible();
+    expect(await screen.findByRole('heading', { name: /выберите удобное время/i })).toBeVisible();
+    expect(screen.getByRole('link', { name: /открыть календарь/i })).toBeVisible();
   });
 
   it('собирает типизированный клиент из сгенерированного контракта', () => {
