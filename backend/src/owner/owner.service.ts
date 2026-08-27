@@ -1,12 +1,14 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 
 import { CalendarRepository } from '../calendars/calendar.repository';
+import { BookingsRepository } from '../bookings/bookings.repository';
 import { toUtcTimestamp } from '../common/contract';
 import { ContractException } from '../common/errors/contract.exception';
 import { Clock } from '../common/time/clock';
 import { SlotsService } from '../slots/slots.service';
 import { OwnerRepository } from './owner.repository';
 import type { RescheduleRangeDto } from './reschedule-range.dto';
+import type { RescheduleBookingDto } from './reschedule-booking.dto';
 import type {
   OwnerBookingDto,
   OwnerBookingListDto,
@@ -23,6 +25,7 @@ export class OwnerService {
     private readonly bookings: OwnerRepository,
     private readonly slots: SlotsService,
     private readonly clock: Clock,
+    private readonly lifecycle: BookingsRepository,
   ) {}
 
   async listBookings(): Promise<OwnerBookingListDto> {
@@ -35,6 +38,74 @@ export class OwnerService {
       generatedAt: toUtcTimestamp(now),
       items: bookings.map((item) => this.mapBooking(item)),
     };
+  }
+
+  async reschedule(bookingId: string, input: RescheduleBookingDto): Promise<OwnerBookingDto> {
+    const calendar = await this.onlyCalendar();
+    const now = this.clock.now();
+    const startsAt = new Date(input.startsAt);
+    const endsAt = new Date(startsAt.getTime() + 30 * 60_000);
+    const result = await this.lifecycle.rescheduleAtomic(
+      calendar.id,
+      bookingId,
+      startsAt,
+      endsAt,
+      now,
+      calendar.minimumLeadTimeMinutes,
+      calendar.bookingHorizonDays,
+    );
+    if (result.kind === 'notFound') {
+      throw new ContractException({
+        code: 'BOOKING_NOT_FOUND',
+        status: HttpStatus.NOT_FOUND,
+        message: 'Booking not found.',
+      });
+    }
+    if (result.kind === 'notReschedulable') {
+      throw new ContractException({
+        code: 'BOOKING_NOT_RESCHEDULABLE',
+        status: HttpStatus.CONFLICT,
+        message: 'Only confirmed future bookings can be rescheduled.',
+        details: [
+          {
+            location: 'path',
+            field: 'bookingId',
+            rule: 'R-1',
+            message:
+              result.reason === 'cancelled'
+                ? 'Booking status is CANCELLED.'
+                : 'Booking has already started.',
+          },
+        ],
+      });
+    }
+    if (result.kind === 'slotTaken') {
+      throw new ContractException({
+        code: 'SLOT_TAKEN',
+        status: HttpStatus.CONFLICT,
+        message: 'The requested slot is no longer available.',
+        details: [
+          {
+            location: 'body',
+            field: 'startsAt',
+            rule: 'B-5',
+            message: 'An active booking already exists for this slot.',
+          },
+        ],
+      });
+    }
+    if (result.kind === 'outsideAvailability') {
+      this.invalidReschedule('R-2', 'Slot is not inside a published availability window.');
+    }
+    if (result.kind === 'invalidTime') {
+      this.invalidReschedule(
+        'R-2',
+        result.reason === 'leadTime'
+          ? 'Slot must start at least 60 minutes from now.'
+          : 'Slot must not start beyond the 90-day booking horizon.',
+      );
+    }
+    return this.mapBooking(result.booking);
   }
 
   async listRescheduleSlots(
@@ -129,5 +200,14 @@ export class OwnerService {
       createdAt: toUtcTimestamp(booking.createdAt),
       rescheduledAt: booking.rescheduledAt ? toUtcTimestamp(booking.rescheduledAt) : null,
     };
+  }
+
+  private invalidReschedule(rule: string, message: string): never {
+    throw new ContractException({
+      code: 'VALIDATION_ERROR',
+      status: HttpStatus.UNPROCESSABLE_ENTITY,
+      message: 'Request body is invalid.',
+      details: [{ location: 'body', field: 'startsAt', rule, message }],
+    });
   }
 }

@@ -13,9 +13,9 @@
 
 ## Статус
 
-Этап 5 из 13: frontend MVP работает поверх OpenAPI mock API; backend содержит PostgreSQL
-модель, доступность, расчет слотов и read endpoints. Транзакционные команды бронирования,
-RabbitMQ и эксплуатационный Docker Compose приходят на следующих этапах — см.
+Этап 6 из 13: frontend MVP работает поверх OpenAPI mock API; backend реализует надежные
+create/cancel/reschedule с PostgreSQL-транзакциями, идемпотентностью и transactional outbox.
+RabbitMQ publisher/consumer и эксплуатационный Docker Compose приходят на следующих этапах — см.
 [`llm/README.md`](llm/README.md).
 
 ## Структура репозитория
@@ -140,5 +140,6 @@ cd frontend && npm run api:generate   # → src/shared/api/generated/schema.d.ts
 - [Модель данных и ER diagram](docs/data-model.md)
 - [ADR 0001. Scope MVP и базовая архитектура](docs/adr/0001-mvp-scope-and-architecture.md)
 - [ADR 0002. Решения API-контракта](docs/adr/0002-api-contract-decisions.md)
+- [ADR 0003. Транзакции и идемпотентность](docs/adr/0003-booking-transaction-and-idempotency.md)
 - [Журнал LLM-разработки](docs/ai-development-log.md)
 - [Frontend README](frontend/README.md) · [Backend README](backend/README.md)

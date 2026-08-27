@@ -10,6 +10,7 @@ export const TEST_ENV = {
   PORT: '3000',
   API_PREFIX: 'api/v1',
   DATABASE_URL: 'postgresql://booking:booking@localhost:5432/booking_call_test',
+  IDEMPOTENCY_ENCRYPTION_KEY: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
   CORS_ORIGINS: 'http://localhost:5173',
   LOG_LEVEL: 'error',
 } as const;

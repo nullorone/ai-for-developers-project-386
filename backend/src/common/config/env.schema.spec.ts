@@ -1,10 +1,15 @@
 import { parseCorsOrigins, validateEnv } from './env.schema';
 
 const validDatabaseUrl = 'postgresql://booking:booking@localhost:5432/booking_call';
+const validEncryptionKey = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+const validEnv = {
+  DATABASE_URL: validDatabaseUrl,
+  IDEMPOTENCY_ENCRYPTION_KEY: validEncryptionKey,
+};
 
 describe('validateEnv', () => {
   it('подставляет значения по умолчанию и приводит PORT к числу', () => {
-    const env = validateEnv({ DATABASE_URL: validDatabaseUrl, PORT: '8080' });
+    const env = validateEnv({ ...validEnv, PORT: '8080' });
 
     expect(env.PORT).toBe(8080);
     expect(env.NODE_ENV).toBe('development');
@@ -13,19 +18,22 @@ describe('validateEnv', () => {
   });
 
   it('падает без DATABASE_URL, а не стартует с неполной конфигурацией', () => {
-    expect(() => validateEnv({})).toThrow(/DATABASE_URL/);
+    expect(() => validateEnv({ IDEMPOTENCY_ENCRYPTION_KEY: validEncryptionKey })).toThrow(
+      /DATABASE_URL/,
+    );
   });
 
   it('отклоняет базу с чужой схемой подключения', () => {
-    expect(() => validateEnv({ DATABASE_URL: 'mysql://user:pass@localhost:3306/db' })).toThrow(
-      /postgres/,
-    );
+    expect(() =>
+      validateEnv({
+        DATABASE_URL: 'mysql://user:pass@localhost:3306/db',
+        IDEMPOTENCY_ENCRYPTION_KEY: validEncryptionKey,
+      }),
+    ).toThrow(/postgres/);
   });
 
   it('отклоняет нечисловой порт', () => {
-    expect(() => validateEnv({ DATABASE_URL: validDatabaseUrl, PORT: 'not-a-port' })).toThrow(
-      /PORT/,
-    );
+    expect(() => validateEnv({ ...validEnv, PORT: 'not-a-port' })).toThrow(/PORT/);
   });
 });
 

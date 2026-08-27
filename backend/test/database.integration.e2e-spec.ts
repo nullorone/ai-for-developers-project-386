@@ -32,6 +32,8 @@ databaseDescribe('PostgreSQL integration: availability and slot queries', () => 
     await app.init();
   });
   beforeEach(async () => {
+    await prisma.idempotencyRecord.deleteMany();
+    await prisma.outboxEvent.deleteMany();
     await prisma.slotReservation.deleteMany();
     await prisma.booking.deleteMany();
     await prisma.availabilityWindow.deleteMany();

@@ -10,6 +10,7 @@ erDiagram
   Calendar ||--o{ Booking : owns
   Calendar ||--o{ SlotReservation : guards
   Booking ||--o{ SlotReservation : history
+  Calendar ||--o{ IdempotencyRecord : scopes
 
   Calendar {
     uuid id PK
@@ -49,6 +50,14 @@ erDiagram
     jsonb payload
     OutboxStatus status
   }
+  IdempotencyRecord {
+    uuid id PK
+    uuid calendarId FK
+    char keyHash
+    char requestHash
+    text responseCiphertext
+    timestamptz expiresAt
+  }
   NotificationLog {
     uuid id PK
     uuid eventId UK
@@ -76,6 +85,10 @@ erDiagram
   резервации переходят из `ACTIVE` в `RELEASED`.
 - `OutboxEvent` и `NotificationLog` подготовлены для этапа 7, но publisher/consumer и
   RabbitMQ на этом этапе намеренно отсутствуют.
+- `idempotency_scope_key` запрещает две записи одного create-key в календаре.
+  Значение ключа не хранится: только SHA-256. Ответ с management token хранится не более
+  контрактного TTL 24 часа в AES-256-GCM ciphertext; поиск просроченных записей покрыт
+  `idempotency_expiry_idx`.
 
 ## Persistence boundary
 
