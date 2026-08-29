@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 
-import { bookingApi } from '../../shared/api/bookingApi';
+import { apiErrorMessage, bookingApi } from '../../shared/api/bookingApi';
 import { formatLocalDateTime } from '../../shared/lib/dateTime';
 import { ErrorState, LoadingState } from '../../shared/ui/AsyncState';
 
@@ -11,7 +11,10 @@ export function OwnerBookingsPage() {
   if (bookings.isPending) return <LoadingState>Загружаем встречи…</LoadingState>;
   if (bookings.isError)
     return (
-      <ErrorState message="Не удалось загрузить встречи." onRetry={() => bookings.refetch()} />
+      <ErrorState
+        message={apiErrorMessage(bookings.error, 'Не удалось загрузить встречи.')}
+        onRetry={() => bookings.refetch()}
+      />
     );
 
   return (

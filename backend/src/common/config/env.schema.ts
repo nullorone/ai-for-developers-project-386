@@ -34,8 +34,11 @@ export const envSchema = z.object({
     .string()
     .regex(/^[0-9a-fA-F]{64}$/, 'IDEMPOTENCY_ENCRYPTION_KEY должен содержать 64 hex-символа'),
 
-  /** Список разрешенных origin через запятую или `*` для локальной разработки. */
-  CORS_ORIGINS: z.string().min(1).default('http://localhost:5173,http://localhost:4173'),
+  /** Allowlist frontend origins; wildcard допустим только без credentialed CORS. */
+  CORS_ORIGINS: z
+    .string()
+    .min(1)
+    .default('http://localhost:5173,http://localhost:4173,https://nullorone.github.io'),
 
   LOG_LEVEL: z.enum(['error', 'warn', 'log', 'debug', 'verbose']).default('log'),
 

@@ -23,6 +23,47 @@ export class ApiError extends Error {
   }
 }
 
+export function isApiErrorCode(error: unknown, ...codes: ErrorBody['code'][]): error is ApiError {
+  return error instanceof ApiError && codes.includes(error.code);
+}
+
+/** Stable user-facing mapping for the error codes shared by all real API screens. */
+export function apiErrorMessage(error: unknown, fallback: string): string {
+  if (!(error instanceof ApiError)) return fallback;
+
+  switch (error.code) {
+    case 'MALFORMED_REQUEST':
+    case 'VALIDATION_ERROR':
+      return 'Проверьте введенные данные и попробуйте снова.';
+    case 'BOOKING_TOKEN_INVALID':
+      return 'Защищенная ссылка неполная или недействительна.';
+    case 'CALENDAR_NOT_FOUND':
+      return 'Календарь не найден.';
+    case 'BOOKING_NOT_FOUND':
+      return 'Бронирование не найдено.';
+    case 'AVAILABILITY_WINDOW_NOT_FOUND':
+      return 'Интервал доступности уже удален или не найден.';
+    case 'SLOT_TAKEN':
+      return 'Выбранное время уже занято. Список свободных слотов обновлен.';
+    case 'IDEMPOTENCY_KEY_REUSED':
+      return 'Попытка бронирования устарела. Повторите отправку формы.';
+    case 'AVAILABILITY_OVERLAP':
+      return 'Интервал пересекается с существующим. Измените границы.';
+    case 'AVAILABILITY_WINDOW_HAS_BOOKINGS':
+      return 'Интервал содержит будущую встречу и не может быть удален.';
+    case 'BOOKING_ALREADY_STARTED':
+      return 'Встреча уже началась или прошла — отменить ее нельзя.';
+    case 'BOOKING_NOT_RESCHEDULABLE':
+      return 'Эту встречу уже нельзя перенести.';
+    case 'RATE_LIMITED':
+      return 'Слишком много запросов. Подождите немного и попробуйте снова.';
+    case 'INTERNAL_ERROR':
+      return 'Сервис временно недоступен. Попробуйте позже.';
+    default:
+      return fallback;
+  }
+}
+
 function unwrap<T>(result: { data?: T; error?: unknown; response: Response }): T {
   if (result.data !== undefined) return result.data;
   const error = result.error as Partial<ErrorBody> | undefined;

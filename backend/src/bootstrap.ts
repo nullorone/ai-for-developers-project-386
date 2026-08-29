@@ -21,6 +21,7 @@ export function configureApp(app: INestApplication, env: Env): INestApplication 
   app.useGlobalFilters(new ContractExceptionFilter());
   app.enableCors({
     origin: parseCorsOrigins(env.CORS_ORIGINS),
+    credentials: false,
     exposedHeaders: ['X-Request-Id', 'Idempotency-Replayed', 'Retry-After'],
     maxAge: 600,
   });

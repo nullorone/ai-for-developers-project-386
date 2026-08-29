@@ -14,6 +14,7 @@ describe('validateEnv', () => {
     expect(env.PORT).toBe(8080);
     expect(env.NODE_ENV).toBe('development');
     expect(env.API_PREFIX).toBe('api/v1');
+    expect(env.CORS_ORIGINS).toContain('https://nullorone.github.io');
     expect(env.LOG_LEVEL).toBe('log');
     expect(env.MESSAGING_ENABLED).toBe(true);
     expect(env.RABBITMQ_URL).toBe('amqp://guest:guest@localhost:5672');

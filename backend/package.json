@@ -26,6 +26,7 @@
     "pretest": "npm run prisma:generate",
     "test": "jest --runInBand",
     "test:integration": "RUN_DATABASE_TESTS=true jest --runInBand --testPathPattern=integration.e2e-spec.ts",
+    "test:frontend-integration": "RUN_DATABASE_TESTS=true jest --runInBand --testPathPattern=frontend-backend.integration.e2e-spec.ts",
     "test:messaging": "RUN_MESSAGING_TESTS=true jest --runInBand --testPathPattern=messaging.integration.e2e-spec.ts",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage --runInBand"

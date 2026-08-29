@@ -56,6 +56,24 @@ describe('ключевые сценарии на contract mock', () => {
     expect(screen.getByRole('button', { name: 'Подтвердить бронирование' })).toBeDisabled();
   });
 
+  it('повторяет неясный create с тем же Idempotency-Key', async () => {
+    mock.failNextBookingNetwork = true;
+    const user = userEvent.setup();
+    renderAt('/calendars/demo');
+
+    await user.click((await screen.findAllByRole('radio'))[0]!);
+    await user.type(screen.getByLabelText('Имя'), 'Тест Гость');
+    await user.type(screen.getByLabelText('Email'), 'guest@example.com');
+    await user.click(screen.getByRole('button', { name: 'Подтвердить бронирование' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Данные сохранены');
+
+    await user.click(screen.getByRole('button', { name: 'Подтвердить бронирование' }));
+    expect(await screen.findByRole('heading', { name: 'Бронирование подтверждено' })).toBeVisible();
+    expect(mock.bookingIdempotencyKeys).toHaveLength(2);
+    expect(mock.bookingIdempotencyKeys[0]).toBeTruthy();
+    expect(mock.bookingIdempotencyKeys[1]).toBe(mock.bookingIdempotencyKeys[0]);
+  });
+
   it('показывает validation, empty и server error состояния', async () => {
     const user = userEvent.setup();
     mock.emptySlots = true;
@@ -68,7 +86,7 @@ describe('ключевые сценарии на contract mock', () => {
     view.unmount();
     mock.failCalendar = true;
     renderAt('/calendars/demo');
-    expect(await screen.findByRole('alert')).toHaveTextContent('Не удалось загрузить календарь');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Сервис временно недоступен');
   });
 
   it('отменяет только с токеном из fragment и показывает повторную отмену', async () => {

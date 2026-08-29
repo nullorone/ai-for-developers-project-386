@@ -13,10 +13,10 @@
 
 ## Статус
 
-Этап 6 из 13: frontend MVP работает поверх OpenAPI mock API; backend реализует надежные
-create/cancel/reschedule с PostgreSQL-транзакциями, идемпотентностью и transactional outbox.
-RabbitMQ publisher/consumer и эксплуатационный Docker Compose приходят на следующих этапах — см.
-[`llm/README.md`](llm/README.md).
+Этап 8 из 13: frontend подключен к реальному NestJS API; guest и owner flow работают через
+PostgreSQL. Backend реализует транзакционный lifecycle, RabbitMQ publisher/consumer, retry и DLQ.
+Prism и stateful mock используются только изолированно и в тестах. Docker Compose появится на
+этапе 10 — см. [`llm/README.md`](llm/README.md).
 
 ## Структура репозитория
 
@@ -80,8 +80,9 @@ npm install
 npm run dev                   # http://localhost:5173
 ```
 
-По умолчанию frontend смотрит на Prism mock (`http://127.0.0.1:4010`). Чтобы работать
-против локального backend, задайте `VITE_API_BASE_URL=http://localhost:3000/api/v1`.
+По умолчанию frontend смотрит на реальный backend (`http://localhost:3000/api/v1`). Для
+изолированной работы с Prism запустите root-команду `npm run mock` и задайте перед `npm run dev`
+`VITE_API_BASE_URL=http://127.0.0.1:4010`.
 
 ### Порты
 
@@ -101,6 +102,9 @@ cd frontend && npm run lint && npm run typecheck && npm test -- --run && npm run
 cd backend  && npm run lint && npm run typecheck && npm test && npm run build
 npm run lint   # в корне: линт контракта
 ```
+
+Сквозные API smoke-тесты guest cancellation и owner reschedule требуют отдельную тестовую базу:
+`cd backend && npm run test:frontend-integration`.
 
 ## Генерация API-клиента frontend
 

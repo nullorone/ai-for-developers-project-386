@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
 
-import { ApiError, bookingApi } from '../../shared/api/bookingApi';
+import { apiErrorMessage, bookingApi, isApiErrorCode } from '../../shared/api/bookingApi';
 import { formatLocalDateTime } from '../../shared/lib/dateTime';
 import { ErrorState, LoadingState, SuccessState } from '../../shared/ui/AsyncState';
 
@@ -16,15 +16,19 @@ export function CancellationPage() {
     [location.hash],
   );
   const booking = useQuery({
-    queryKey: ['cancellation', bookingId, token],
+    queryKey: ['cancellation', bookingId],
     queryFn: () => bookingApi.cancellation(bookingId, token),
     enabled: Boolean(bookingId && token),
     retry: false,
   });
   const cancellation = useMutation({
     mutationFn: () => bookingApi.cancel(bookingId, token),
-    onSuccess: (data) => {
-      queryClient.setQueryData(['cancellation', bookingId, token], data);
+    onSuccess: async (data) => {
+      queryClient.setQueryData(['cancellation', bookingId], data);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['slots'] }),
+        queryClient.invalidateQueries({ queryKey: ['owner', 'bookings'] }),
+      ]);
     },
   });
 
@@ -39,13 +43,13 @@ export function CancellationPage() {
   }
   if (booking.isPending) return <LoadingState>Проверяем защищенную ссылку…</LoadingState>;
   if (booking.isError) {
-    const invalid = booking.error instanceof ApiError && booking.error.status === 403;
+    const invalid = isApiErrorCode(booking.error, 'BOOKING_TOKEN_INVALID');
     return (
       <ErrorState
         message={
           invalid
             ? 'Ссылка недействительна или токен не подходит.'
-            : 'Не удалось загрузить бронирование.'
+            : apiErrorMessage(booking.error, 'Не удалось загрузить бронирование.')
         }
         onRetry={invalid ? undefined : () => booking.refetch()}
       />
@@ -69,11 +73,10 @@ export function CancellationPage() {
       ) : null}
       {cancellation.isError ? (
         <ErrorState
-          message={
-            cancellation.error instanceof ApiError && cancellation.error.status === 409
-              ? 'Встреча уже началась или прошла — отменить ее нельзя.'
-              : 'Не удалось отменить бронирование. Попробуйте снова.'
-          }
+          message={apiErrorMessage(
+            cancellation.error,
+            'Не удалось отменить бронирование. Попробуйте снова.',
+          )}
         />
       ) : null}
       {booking.data.cancellable ? (

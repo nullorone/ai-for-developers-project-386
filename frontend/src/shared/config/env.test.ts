@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { DEFAULT_API_BASE_URL, readAppConfig } from './env';
 
 describe('readAppConfig', () => {
-  it('подставляет адрес mock server, когда переменная не задана', () => {
+  it('подставляет адрес реального local API, когда переменная не задана', () => {
     expect(readAppConfig({})).toEqual({ apiBaseUrl: DEFAULT_API_BASE_URL });
   });
 

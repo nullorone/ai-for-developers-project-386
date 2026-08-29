@@ -1,12 +1,10 @@
 import { z } from 'zod';
 
 /**
- * Значение по умолчанию — локальный Prism mock из корневого контракта.
- * Prism обслуживает операции от корня, без префикса `/api/v1`; боевой backend
- * добавляет префикс. Поэтому адрес всегда приходит из переменной окружения
- * (см. docs/api.md, раздел 3).
+ * Development по умолчанию работает с реальным локальным backend. Prism остается
+ * явным изолированным режимом: для него VITE_API_BASE_URL задают адрес без `/api/v1`.
  */
-export const DEFAULT_API_BASE_URL = 'http://127.0.0.1:4010';
+export const DEFAULT_API_BASE_URL = 'http://localhost:3000/api/v1';
 
 const envSchema = z.object({
   VITE_API_BASE_URL: z.string().url().default(DEFAULT_API_BASE_URL),
