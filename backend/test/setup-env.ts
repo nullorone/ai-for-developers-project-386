@@ -13,6 +13,8 @@ export const TEST_ENV = {
   IDEMPOTENCY_ENCRYPTION_KEY: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
   CORS_ORIGINS: 'http://localhost:5173',
   LOG_LEVEL: 'error',
+  MESSAGING_ENABLED: 'false',
+  RABBITMQ_URL: 'amqp://guest:guest@localhost:5672',
 } as const;
 
 for (const [key, value] of Object.entries(TEST_ENV)) {

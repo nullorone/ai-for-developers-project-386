@@ -15,6 +15,8 @@ describe('validateEnv', () => {
     expect(env.NODE_ENV).toBe('development');
     expect(env.API_PREFIX).toBe('api/v1');
     expect(env.LOG_LEVEL).toBe('log');
+    expect(env.MESSAGING_ENABLED).toBe(true);
+    expect(env.RABBITMQ_URL).toBe('amqp://guest:guest@localhost:5672');
   });
 
   it('падает без DATABASE_URL, а не стартует с неполной конфигурацией', () => {
@@ -34,6 +36,13 @@ describe('validateEnv', () => {
 
   it('отклоняет нечисловой порт', () => {
     expect(() => validateEnv({ ...validEnv, PORT: 'not-a-port' })).toThrow(/PORT/);
+  });
+
+  it('валидирует RabbitMQ URL и преобразует feature flag', () => {
+    expect(validateEnv({ ...validEnv, MESSAGING_ENABLED: 'false' }).MESSAGING_ENABLED).toBe(false);
+    expect(() => validateEnv({ ...validEnv, RABBITMQ_URL: 'https://broker.test' })).toThrow(
+      /RABBITMQ_URL/,
+    );
   });
 });
 

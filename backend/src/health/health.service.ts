@@ -1,11 +1,15 @@
 import { Injectable } from '@nestjs/common';
 
 import { toUtcTimestamp, type HealthStatus } from '../common/contract';
+import { RabbitMqService } from '../messaging/rabbitmq.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
 export class HealthService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly rabbit: RabbitMqService,
+  ) {}
 
   /**
    * `GET /health/live`: подтверждает, что процесс жив. Зависимости не проверяются,
@@ -16,16 +20,22 @@ export class HealthService {
   }
 
   /**
-   * `GET /health/ready`: учитывает доступность PostgreSQL (правило N-18).
-   * RabbitMQ в проверку не входит: его недоступность не блокирует запись в базу
-   * благодаря transactional outbox (этап 7).
+   * RabbitMQ виден в readiness, но его сбой не затрагивает HTTP-транзакцию Booking:
+   * события остаются в PostgreSQL outbox до восстановления broker.
    */
   async ready(): Promise<HealthStatus> {
     const databaseUp = await this.prisma.isReachable();
+    const brokerUp = this.rabbit.isReachable();
+    const checks: HealthStatus['checks'] = [
+      { name: 'database', status: databaseUp ? 'up' : 'down' },
+    ];
+    if (this.rabbit.enabled) {
+      checks.push({ name: 'messageBroker', status: brokerUp ? 'up' : 'down' });
+    }
 
     return {
-      status: databaseUp ? 'up' : 'down',
-      checks: [{ name: 'database', status: databaseUp ? 'up' : 'down' }],
+      status: databaseUp && brokerUp ? 'up' : 'down',
+      checks,
       timestamp: toUtcTimestamp(),
     };
   }

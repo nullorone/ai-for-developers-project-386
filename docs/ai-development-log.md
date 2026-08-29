@@ -453,3 +453,37 @@ Management token генерируется из 32 случайных байт, �
 ### Следующий этап
 
 Этап 7 — RabbitMQ publisher, retry/DLQ и идемпотентный consumer (`llm/07-rabbitmq-outbox.md`).
+
+## Этап 7. RabbitMQ, transactional outbox и consumer
+
+### Задача и подход
+
+Добавлен versioned envelope v1 без персональных данных, reconnecting RabbitMQ connection с
+publisher confirms и идемпотентным объявлением durable topology. Outbox publisher claim'ит
+ограниченный batch через PostgreSQL `FOR UPDATE SKIP LOCKED` и lease, выполняет network call
+вне транзакции и ставит `PUBLISHED` только после confirm. Consumer трех `booking.*` событий
+создает `NotificationLog` транзакционно, дедуплицирует по unique eventId и делает ack после
+commit. Временные ошибки проходят ограниченный TTL retry, затем publisher-confirmed DLQ.
+
+Messaging lifecycle отключается `MESSAGING_ENABLED`; health показывает PostgreSQL и broker.
+Structured logs/counters покрывают backlog, publish failures, retries, DLQ и duplicates.
+Архитектура и безопасный DLQ replay описаны в `docs/messaging.md`.
+
+### Гарантии и риски
+
+Доставка at-least-once: crash между broker confirm и PostgreSQL update вызывает безопасный
+duplicate. Crash после commit NotificationLog до ack также вызывает duplicate. Exactly-once
+не заявляется; обе границы закрыты unique eventId consumer. Опубликованный outbox сохраняется
+для аудита. Сон single-process deployment задерживает delivery, но не теряет pending events.
+
+### Проверки
+
+Добавлены Testcontainers-сценарии PostgreSQL 16/RabbitMQ 3.13 для трех event types,
+broker outage/recovery, duplicate и retry/DLQ. `npm run test:messaging` — 2/2 passed;
+обычный Jest — 41/41 passed (контейнерные suites штатно opt-in); `format:check`, `typecheck`,
+ESLint без warnings и production `build` завершились успешно. Smoke временно приостанавливает
+broker, создает booking с pending outbox, восстанавливает broker и дожидается NotificationLog.
+
+### Следующий этап
+
+Этап 8 — интеграция frontend с backend (`llm/08-frontend-backend-integration.md`).
