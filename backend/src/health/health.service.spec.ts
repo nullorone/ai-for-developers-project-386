@@ -1,6 +1,7 @@
 import { Test } from '@nestjs/testing';
 
 import { PrismaService } from '../prisma/prisma.service';
+import { RabbitMqService } from '../messaging/rabbitmq.service';
 import { HealthService } from './health.service';
 
 const UTC_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
@@ -8,9 +9,18 @@ const UTC_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
 describe('HealthService', () => {
   const isReachable = jest.fn<Promise<boolean>, []>();
 
-  async function createService(): Promise<HealthService> {
+  async function createService(
+    broker = { enabled: false, reachable: true },
+  ): Promise<HealthService> {
     const moduleRef = await Test.createTestingModule({
-      providers: [HealthService, { provide: PrismaService, useValue: { isReachable } }],
+      providers: [
+        HealthService,
+        { provide: PrismaService, useValue: { isReachable } },
+        {
+          provide: RabbitMqService,
+          useValue: { enabled: broker.enabled, isReachable: () => broker.reachable },
+        },
+      ],
     }).compile();
 
     return moduleRef.get(HealthService);
@@ -43,6 +53,19 @@ describe('HealthService', () => {
     await expect(service.overall()).resolves.toMatchObject({
       status: 'down',
       checks: [{ name: 'database', status: 'down' }],
+    });
+  });
+
+  it('показывает недоступный RabbitMQ, когда messaging включен', async () => {
+    isReachable.mockResolvedValue(true);
+    const service = await createService({ enabled: true, reachable: false });
+
+    await expect(service.ready()).resolves.toMatchObject({
+      status: 'down',
+      checks: [
+        { name: 'database', status: 'up' },
+        { name: 'messageBroker', status: 'down' },
+      ],
     });
   });
 });
