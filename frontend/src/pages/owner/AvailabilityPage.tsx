@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRef, useState, type FormEvent } from 'react';
 
-import { ApiError, bookingApi } from '../../shared/api/bookingApi';
+import { apiErrorMessage, bookingApi, isApiErrorCode } from '../../shared/api/bookingApi';
 import { formatLocalDateTime, localInputToUtc } from '../../shared/lib/dateTime';
 import { ErrorState, LoadingState, SuccessState } from '../../shared/ui/AsyncState';
 
@@ -24,14 +24,20 @@ export function AvailabilityPage() {
     onSuccess: async () => {
       setStartsAt('');
       setEndsAt('');
-      await queryClient.invalidateQueries({ queryKey: ['owner', 'availability'] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['owner', 'availability'] }),
+        queryClient.invalidateQueries({ queryKey: ['slots'] }),
+      ]);
       feedbackRef.current?.focus();
     },
   });
   const deleteWindow = useMutation({
     mutationFn: bookingApi.deleteAvailability,
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['owner', 'availability'] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['owner', 'availability'] }),
+        queryClient.invalidateQueries({ queryKey: ['slots'] }),
+      ]);
       feedbackRef.current?.focus();
     },
   });
@@ -57,7 +63,8 @@ export function AvailabilityPage() {
   }
 
   const mutationError = createWindow.error ?? deleteWindow.error;
-  const conflict = mutationError instanceof ApiError && mutationError.status === 409;
+  const overlap = isApiErrorCode(mutationError, 'AVAILABILITY_OVERLAP');
+  const hasBookings = isApiErrorCode(mutationError, 'AVAILABILITY_WINDOW_HAS_BOOKINGS');
 
   return (
     <div className="two-column">
@@ -92,9 +99,9 @@ export function AvailabilityPage() {
         {createWindow.isError ? (
           <ErrorState
             message={
-              conflict
+              overlap
                 ? 'Интервал пересекается с существующим. Измените границы.'
-                : 'Не удалось создать интервал.'
+                : apiErrorMessage(createWindow.error, 'Не удалось создать интервал.')
             }
           />
         ) : null}
@@ -108,7 +115,7 @@ export function AvailabilityPage() {
         {windows.isPending ? <LoadingState /> : null}
         {windows.isError ? (
           <ErrorState
-            message="Не удалось загрузить доступность."
+            message={apiErrorMessage(windows.error, 'Не удалось загрузить доступность.')}
             onRetry={() => windows.refetch()}
           />
         ) : null}
@@ -125,9 +132,9 @@ export function AvailabilityPage() {
         {deleteWindow.isError ? (
           <ErrorState
             message={
-              conflict
+              hasBookings
                 ? 'Интервал нельзя удалить: внутри есть будущая встреча.'
-                : 'Не удалось удалить интервал.'
+                : apiErrorMessage(deleteWindow.error, 'Не удалось удалить интервал.')
             }
           />
         ) : null}

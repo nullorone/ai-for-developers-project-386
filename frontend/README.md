@@ -25,7 +25,7 @@ Hash routing совместим с GitHub Pages. После адреса сай�
 Management token не записывается в `localStorage`, `sessionStorage`, логи или query/path API.
 Он остается в памяти/fragment и передается только заголовком `X-Booking-Token`.
 
-## Быстрый старт на Prism
+## Быстрый старт с реальным API
 
 ```bash
 cd frontend
@@ -34,9 +34,21 @@ npm install
 npm run dev          # http://localhost:5173
 ```
 
-В другом терминале из корня проекта запустите `npm run mock`. Prism отдает примеры
-непосредственно из `openapi.yaml`, поэтому frontend можно пройти без backend. Production build
-не требует запущенного Prism.
+Сначала поднимите PostgreSQL и backend по инструкции в корневом README. По умолчанию frontend
+обращается к `http://localhost:3000/api/v1`; другое окружение задается через
+`VITE_API_BASE_URL` во время build/dev.
+
+### Изолированный mock mode
+
+Запустите `npm run mock` в корне, затем frontend отдельной командой:
+
+```bash
+cd frontend
+VITE_API_BASE_URL=http://127.0.0.1:4010 npm run dev
+```
+
+Prism отдает примеры из `openapi.yaml`; stateful mock находится только в `tests/`. Ни один mock
+handler не импортируется runtime-кодом и не входит в production build.
 
 `npm run dev`, `build`, `typecheck` и `test` автоматически выполняют кодогенерацию
 из контракта (`pre*`-скрипты), поэтому отдельный шаг не нужен.
@@ -59,10 +71,10 @@ npm run dev          # http://localhost:5173
 Только `.env.example` хранится в Git; `.env*` игнорируются. Секретов у frontend нет:
 любая переменная с префиксом `VITE_` попадает в бандл.
 
-| Переменная          | Назначение                                                                                                                                       |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `VITE_API_BASE_URL` | Базовый адрес API. По умолчанию `http://127.0.0.1:4010` (Prism mock, без префикса `/api/v1`); локальный backend — `http://localhost:3000/api/v1` |
-| `VITE_BASE_PATH`    | `base` сборки Vite. Для GitHub Pages из подкаталога репозитория                                                                                  |
+| Переменная          | Назначение                                                                                                   |
+| ------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `VITE_API_BASE_URL` | API base URL; по умолчанию real local backend `http://localhost:3000/api/v1`. Prism: `http://127.0.0.1:4010` |
+| `VITE_BASE_PATH`    | `base` сборки Vite. Для GitHub Pages из подкаталога репозитория                                              |
 
 Значения валидируются zod в [`src/shared/config/env.ts`](src/shared/config/env.ts):
 неверный URL роняет приложение с понятным сообщением, а не «тихо» ломает запросы.
@@ -108,6 +120,10 @@ tests/          # smoke- и интеграционные тесты уровня
 `conflictNextReschedule` воспроизводят ключевые состояния. Testing Library покрывает guest happy
 path, `409`, отмену, owner CRUD и сохранение исходной встречи после неуспешного переноса.
 Отдельные timezone-тесты проверяют один UTC-момент в `Europe/Moscow` и `America/New_York`.
+
+Retry неизменившегося create payload повторяет тот же `Idempotency-Key`. Успешные мутации и
+конфликты инвалидируют public slots и связанные owner/cancellation queries. Ошибки реального API
+локализуются по OpenAPI `code`: validation, invalid token, not found, conflict, rate limit и 5xx.
 
 Статический Prism smoke всего контракта запускается из корня: `npm run smoke:mock`.
 

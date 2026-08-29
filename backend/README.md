@@ -26,19 +26,20 @@ curl -s http://localhost:3000/api/v1/health/live
 
 ## Команды
 
-| Команда | Что делает |
-| --- | --- |
-| `npm run prisma:generate` | Генерирует Prisma Client (в `node_modules`) |
-| `npm run prisma:migrate` / `prisma:seed` | Применяет миграции / идемпотентно создает календарь `demo` |
-| `npm run build` | `nest build` → `dist/` |
-| `npm start` | `node dist/main.js` (требует предварительный `build`) |
-| `npm run start:dev` | Watch-режим |
-| `npm run typecheck` | `tsc --noEmit` |
-| `npm run lint` | ESLint с типизированными правилами, `--max-warnings=0` |
-| `npm run format` / `format:check` | Prettier |
-| `npm test` | Jest: unit-тесты `src/**/*.spec.ts` и smoke-тест `test/*.e2e-spec.ts` |
-| `npm run test:integration` | PostgreSQL integration tests; требует доступную тестовую `DATABASE_URL` |
-| `npm run test:cov` | Отчет о покрытии |
+| Команда                                  | Что делает                                                              |
+| ---------------------------------------- | ----------------------------------------------------------------------- |
+| `npm run prisma:generate`                | Генерирует Prisma Client (в `node_modules`)                             |
+| `npm run prisma:migrate` / `prisma:seed` | Применяет миграции / идемпотентно создает календарь `demo`              |
+| `npm run build`                          | `nest build` → `dist/`                                                  |
+| `npm start`                              | `node dist/main.js` (требует предварительный `build`)                   |
+| `npm run start:dev`                      | Watch-режим                                                             |
+| `npm run typecheck`                      | `tsc --noEmit`                                                          |
+| `npm run lint`                           | ESLint с типизированными правилами, `--max-warnings=0`                  |
+| `npm run format` / `format:check`        | Prettier                                                                |
+| `npm test`                               | Jest: unit-тесты `src/**/*.spec.ts` и smoke-тест `test/*.e2e-spec.ts`   |
+| `npm run test:integration`               | PostgreSQL integration tests; требует доступную тестовую `DATABASE_URL` |
+| `npm run test:frontend-integration`      | Real API smoke для guest и owner frontend flows                         |
+| `npm run test:cov`                       | Отчет о покрытии                                                        |
 
 ## Переменные окружения
 
@@ -46,15 +47,15 @@ curl -s http://localhost:3000/api/v1/health/live
 в [`src/common/config/env.schema.ts`](src/common/config/env.schema.ts) **до** создания
 приложения: некорректная конфигурация роняет процесс сразу и с понятным сообщением.
 
-| Переменная | По умолчанию | Назначение |
-| --- | --- | --- |
-| `NODE_ENV` | `development` | Режим запуска |
-| `PORT` | `3000` | Порт HTTP-сервера |
-| `API_PREFIX` | `api/v1` | Глобальный префикс из контракта |
-| `DATABASE_URL` | — (обязательна) | Строка подключения PostgreSQL |
-| `IDEMPOTENCY_ENCRYPTION_KEY` | — (обязательна) | 32-byte hex key для AES-GCM ответа идемпотентности |
-| `CORS_ORIGINS` | `http://localhost:5173,http://localhost:4173` | Разрешенные origin через запятую или `*` |
-| `LOG_LEVEL` | `log` | `error` \| `warn` \| `log` \| `debug` \| `verbose` |
+| Переменная                   | По умолчанию                               | Назначение                                         |
+| ---------------------------- | ------------------------------------------ | -------------------------------------------------- |
+| `NODE_ENV`                   | `development`                              | Режим запуска                                      |
+| `PORT`                       | `3000`                                     | Порт HTTP-сервера                                  |
+| `API_PREFIX`                 | `api/v1`                                   | Глобальный префикс из контракта                    |
+| `DATABASE_URL`               | — (обязательна)                            | Строка подключения PostgreSQL                      |
+| `IDEMPOTENCY_ENCRYPTION_KEY` | — (обязательна)                            | 32-byte hex key для AES-GCM ответа идемпотентности |
+| `CORS_ORIGINS`               | local Vite + `https://nullorone.github.io` | Allowlist frontend origin через запятую            |
+| `LOG_LEVEL`                  | `log`                                      | `error` \| `warn` \| `log` \| `debug` \| `verbose` |
 
 ## Соответствие контракту
 
@@ -86,8 +87,8 @@ src/
 ├── slots/              # чистая генерация и публичный slots endpoint
 ├── owner/              # будущие встречи и read endpoint слотов переноса
 ├── bookings/           # create/cancellation, token security, idempotency и rate limit
-├── messaging/          # publisher приходит на этапе 7
-├── notifications/      # consumer приходит на этапе 7
+├── messaging/          # RabbitMQ connection, outbox publisher и metrics
+├── notifications/      # идемпотентный consumer с retry/DLQ
 ├── bootstrap.ts        # единая настройка приложения для main.ts и e2e-тестов
 └── main.ts
 test/                   # smoke-тест health и подготовка окружения тестов
@@ -116,4 +117,4 @@ Create, guest cancellation и owner reschedule реализованы по
 [`ADR 0003`](../docs/adr/0003-booking-transaction-and-idempotency.md). Active slot защищен
 partial unique index PostgreSQL, а Booking/reservation/outbox меняются одной транзакцией.
 `Idempotency-Key` хранится только как SHA-256; воспроизводимый 24 часа ответ зашифрован
-AES-256-GCM. RabbitMQ на этапе 6 не подключен.
+AES-256-GCM. RabbitMQ получает события из transactional outbox и доставляет их at-least-once.

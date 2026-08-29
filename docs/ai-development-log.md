@@ -487,3 +487,47 @@ broker, создает booking с pending outbox, восстанавливает
 ### Следующий этап
 
 Этап 8 — интеграция frontend с backend (`llm/08-frontend-backend-integration.md`).
+
+## Этап 8. Интеграция frontend и backend
+
+### Задача и подход
+
+Frontend development переключен с неявного Prism на реальный локальный NestJS API; Prism
+остался явно документированным mock mode, а stateful mock импортируется только тестами. Повтор
+неопределившегося create сохраняет один `Idempotency-Key` для неизменившегося payload. Management
+token остается во fragment/in-memory, передается только `X-Booking-Token` и больше не входит даже
+в TanStack Query key.
+
+После create/cancel/reschedule и изменений availability инвалидируются зависимые public slots и
+owner queries. UI локализует все OpenAPI error codes: malformed/validation, invalid token,
+not found, slot/idempotency/availability conflicts, not reschedulable, rate limit и internal error.
+Backend CORS использует allowlist local Vite/preview и будущего `https://nullorone.github.io`;
+credentials отключены.
+
+### Интеграционные проверки
+
+Добавлен opt-in PostgreSQL smoke `frontend-backend.integration.e2e-spec.ts`. Он проходит полную
+цепочку guest slots → create → protected view → cancel → released slot и owner list → available
+slots → reschedule, а также проверяет GitHub Pages CORS без credentialed wildcard.
+
+- codegen до/после совпал; `openapi.yaml` менять не потребовалось;
+- frontend: typecheck, ESLint, Prettier, production build, 31/31 Vitest;
+- backend: typecheck, ESLint, Prettier, build, 41/41 обычных Jest;
+- PostgreSQL 16: 14/14 integration tests, включая 3/3 нового smoke;
+- новый smoke повторно прошел с одновременно включенными PostgreSQL 16 и RabbitMQ 3.13;
+- root OpenAPI lint: 14 operationId и 28 schemas без предупреждений;
+- timezone tests отдельно прошли с `TZ=Europe/Moscow` и `TZ=America/New_York`;
+- source/bundle audit не нашел mock handler/token fixtures в production и не нашел application
+  logging или persistent storage management token; storage-тесты остаются зелеными.
+
+### Обнаруженные расхождения и риски
+
+Контрактных ошибок не обнаружено. Исправлены расхождения реализации: mock URL по умолчанию,
+новый idempotency key при retry, неполная cache invalidation, status-only обработка ошибок и
+неполный CORS allowlist. HTTP smoke отдельно проходит без broker и в полном окружении с RabbitMQ;
+delivery/retry/DLQ остаются ответственностью messaging integration этапа 7. Owner endpoints
+по-прежнему публичны согласно scope MVP.
+
+### Следующий этап
+
+Этап 9 — расширение полного набора тестов (`llm/09-testing.md`).

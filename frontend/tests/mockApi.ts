@@ -59,8 +59,10 @@ export class ContractMockApi {
   conflictNextBooking = false;
   conflictNextReschedule = false;
   failCalendar = false;
+  failNextBookingNetwork = false;
   emptySlots = false;
   bookingTokenHeaderWasUsed = false;
+  bookingIdempotencyKeys: string[] = [];
   availability: AvailabilityWindow[] = [];
   ownerBookings: OwnerBooking[] = [
     {
@@ -90,7 +92,9 @@ export class ContractMockApi {
   fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const request = input instanceof Request ? input : new Request(input, init);
     const url = new URL(request.url);
-    const path = url.pathname;
+    // Runtime default targets the real backend with its global prefix. The isolated
+    // mock also accepts Prism-style unprefixed paths so tests cover both modes.
+    const path = url.pathname.replace(/^\/api\/v1(?=\/)/, '');
 
     if (request.method === 'GET' && path === '/calendars/demo')
       return this.failCalendar ? error(500, 'INTERNAL_ERROR') : json(this.calendar);
@@ -107,6 +111,11 @@ export class ContractMockApi {
       } satisfies components['schemas']['SlotList']);
     }
     if (request.method === 'POST' && path === '/calendars/demo/bookings') {
+      this.bookingIdempotencyKeys.push(request.headers.get('Idempotency-Key') ?? '');
+      if (this.failNextBookingNetwork) {
+        this.failNextBookingNetwork = false;
+        throw new TypeError('Mocked network failure');
+      }
       if (this.conflictNextBooking) {
         this.conflictNextBooking = false;
         return error(409, 'SLOT_TAKEN');

@@ -5,7 +5,12 @@ import { useForm } from 'react-hook-form';
 import { useNavigate, useParams } from 'react-router-dom';
 import { z } from 'zod';
 
-import { ApiError, bookingApi } from '../../shared/api/bookingApi';
+import {
+  apiErrorMessage,
+  bookingApi,
+  isApiErrorCode,
+  type BookingCreated,
+} from '../../shared/api/bookingApi';
 import {
   browserTimeZone,
   formatLocalTime,
@@ -51,6 +56,7 @@ export function CalendarPage() {
   const [date, setDate] = useState(localDateValue());
   const [selectedSlot, setSelectedSlot] = useState<string>();
   const conflictRef = useRef<HTMLDivElement>(null);
+  const attemptRef = useRef<{ payload: string; key: string }>();
   const range = useMemo(() => localDayUtcRange(date), [date]);
   const calendar = useQuery({
     queryKey: ['calendar', slug],
@@ -68,25 +74,33 @@ export function CalendarPage() {
   const booking = useMutation({
     mutationFn: (values: GuestForm) => {
       if (!selectedSlot) throw new Error('Сначала выберите время.');
-      return bookingApi.createBooking(
-        slug,
-        {
-          startsAt: selectedSlot,
-          guestName: values.guestName.trim(),
-          guestEmail: values.guestEmail.trim(),
-          ...(values.comment.trim() ? { comment: values.comment.trim() } : {}),
-        },
-        crypto.randomUUID(),
-      );
+      const body = {
+        startsAt: selectedSlot,
+        guestName: values.guestName.trim(),
+        guestEmail: values.guestEmail.trim(),
+        ...(values.comment.trim() ? { comment: values.comment.trim() } : {}),
+      };
+      const payload = JSON.stringify(body);
+      if (attemptRef.current?.payload !== payload) {
+        attemptRef.current = { payload, key: crypto.randomUUID() };
+      }
+      return bookingApi.createBooking(slug, body, attemptRef.current.key);
     },
-    onSuccess: (created) => {
+    onSuccess: async (created: BookingCreated) => {
+      attemptRef.current = undefined;
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['slots', slug] }),
+        queryClient.invalidateQueries({ queryKey: ['owner', 'bookings'] }),
+      ]);
       navigate(`/bookings/${created.id}/confirmed`, { state: created });
     },
     onError: async (error) => {
-      if (error instanceof ApiError && error.status === 409) {
+      if (isApiErrorCode(error, 'SLOT_TAKEN')) {
         setSelectedSlot(undefined);
         await queryClient.invalidateQueries({ queryKey: ['slots', slug] });
         conflictRef.current?.focus();
+      } else if (isApiErrorCode(error, 'IDEMPOTENCY_KEY_REUSED')) {
+        attemptRef.current = undefined;
       }
     },
   });
@@ -94,11 +108,14 @@ export function CalendarPage() {
   if (calendar.isPending) return <LoadingState>Загружаем календарь…</LoadingState>;
   if (calendar.isError) {
     return (
-      <ErrorState message="Не удалось загрузить календарь." onRetry={() => calendar.refetch()} />
+      <ErrorState
+        message={apiErrorMessage(calendar.error, 'Не удалось загрузить календарь.')}
+        onRetry={() => calendar.refetch()}
+      />
     );
   }
 
-  const isConflict = booking.error instanceof ApiError && booking.error.status === 409;
+  const isConflict = isApiErrorCode(booking.error, 'SLOT_TAKEN');
 
   return (
     <section className="stack stack--large">
@@ -130,7 +147,7 @@ export function CalendarPage() {
           {slots.isPending ? <LoadingState>Ищем свободные слоты…</LoadingState> : null}
           {slots.isError ? (
             <ErrorState
-              message="Не удалось получить свободное время."
+              message={apiErrorMessage(slots.error, 'Не удалось получить свободное время.')}
               onRetry={() => slots.refetch()}
             />
           ) : null}
@@ -208,7 +225,12 @@ export function CalendarPage() {
             Это время уже занято. Мы обновили список — выберите другой слот.
           </div>
         ) : booking.isError ? (
-          <ErrorState message="Не удалось создать бронирование. Ваши данные сохранены в форме — попробуйте снова." />
+          <ErrorState
+            message={apiErrorMessage(
+              booking.error,
+              'Не удалось создать бронирование. Данные сохранены — попробуйте снова.',
+            )}
+          />
         ) : null}
         <button className="button" type="submit" disabled={!selectedSlot || booking.isPending}>
           {booking.isPending ? 'Бронируем…' : 'Подтвердить бронирование'}

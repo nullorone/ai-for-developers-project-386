@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 
-import { ApiError, bookingApi } from '../../shared/api/bookingApi';
+import { apiErrorMessage, bookingApi, isApiErrorCode } from '../../shared/api/bookingApi';
 import { formatLocalDate, formatLocalDateTime, formatLocalTime } from '../../shared/lib/dateTime';
 import { ErrorState, LoadingState, SuccessState } from '../../shared/ui/AsyncState';
 
@@ -22,11 +22,12 @@ export function ReschedulePage() {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['owner', 'bookings'] }),
         queryClient.invalidateQueries({ queryKey: ['owner', 'bookings', bookingId, 'slots'] }),
+        queryClient.invalidateQueries({ queryKey: ['slots'] }),
       ]);
       feedbackRef.current?.focus();
     },
     onError: async (error) => {
-      if (error instanceof ApiError && error.status === 409) {
+      if (isApiErrorCode(error, 'SLOT_TAKEN')) {
         setSelectedSlot('');
         await queryClient.invalidateQueries({
           queryKey: ['owner', 'bookings', bookingId, 'slots'],
@@ -38,13 +39,13 @@ export function ReschedulePage() {
 
   if (slots.isPending) return <LoadingState>Ищем варианты переноса…</LoadingState>;
   if (slots.isError) {
-    const notReschedulable = slots.error instanceof ApiError && slots.error.status === 409;
+    const notReschedulable = isApiErrorCode(slots.error, 'BOOKING_NOT_RESCHEDULABLE');
     return (
       <ErrorState
         message={
           notReschedulable
             ? 'Эту встречу уже нельзя перенести. Исходные данные не изменены.'
-            : 'Не удалось получить слоты для переноса.'
+            : apiErrorMessage(slots.error, 'Не удалось получить слоты для переноса.')
         }
         onRetry={notReschedulable ? undefined : () => slots.refetch()}
       />
@@ -52,7 +53,7 @@ export function ReschedulePage() {
   }
 
   const alternatives = slots.data.slots.filter((slot) => !slot.current);
-  const conflict = reschedule.error instanceof ApiError && reschedule.error.status === 409;
+  const conflict = isApiErrorCode(reschedule.error, 'SLOT_TAKEN');
 
   return (
     <div className="card stack stack--large">
@@ -97,7 +98,7 @@ export function ReschedulePage() {
             message={
               conflict
                 ? 'Выбранное время уже занято. Список обновлен, а исходная встреча сохранена.'
-                : 'Не удалось перенести встречу. Исходная встреча сохранена.'
+                : `${apiErrorMessage(reschedule.error, 'Не удалось перенести встречу.')} Исходная встреча сохранена.`
             }
           />
         </div>
