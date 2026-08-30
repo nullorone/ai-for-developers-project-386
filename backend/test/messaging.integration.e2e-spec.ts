@@ -7,7 +7,6 @@ import request from 'supertest';
 import type { App } from 'supertest/types';
 import {
   GenericContainer,
-  getContainerRuntimeClient,
   Wait,
   type StartedTestContainer,
 } from 'testcontainers';
@@ -16,6 +15,7 @@ import { configureApp } from '../src/bootstrap';
 import { validateEnv } from '../src/common/config/env.schema';
 import { Clock } from '../src/common/time/clock';
 import type { BookingEventEnvelope, BookingEventType } from '../src/messaging/event-envelope';
+import { MessagingMetricsService } from '../src/messaging/messaging-metrics.service';
 import { RabbitMqService } from '../src/messaging/rabbitmq.service';
 import { PrismaService } from '../src/prisma/prisma.service';
 
@@ -32,6 +32,7 @@ messagingDescribe('RabbitMQ transactional outbox integration', () => {
   let app: INestApplication;
   let prisma: PrismaService;
   let rabbit: RabbitMqService;
+  let metrics: MessagingMetricsService;
   let server: App;
 
   beforeAll(async () => {
@@ -83,6 +84,7 @@ messagingDescribe('RabbitMQ transactional outbox integration', () => {
     await app.init();
     prisma = app.get(PrismaService);
     rabbit = app.get(RabbitMqService);
+    metrics = app.get(MessagingMetricsService);
     server = app.getHttpServer() as App;
     await eventually(() => rabbit.isReachable());
   });
@@ -111,9 +113,9 @@ messagingDescribe('RabbitMQ transactional outbox integration', () => {
   });
 
   it('stores while broker is unavailable, recovers, handles all types and deduplicates', async () => {
-    const runtime = await getContainerRuntimeClient();
-    const rawRabbit = runtime.container.getById(rabbitContainer.getId());
-    await rawRabbit.pause();
+    const stopped = await rabbitContainer.exec(['rabbitmqctl', 'stop_app']);
+    expect(stopped.exitCode).toBe(0);
+    await eventually(() => !rabbit.isReachable(), 30_000);
 
     let bookingId = '';
     try {
@@ -126,10 +128,11 @@ messagingDescribe('RabbitMQ transactional outbox integration', () => {
         })
         .expect(201);
       bookingId = (createdResponse.body as { id: string }).id;
+      expect(await prisma.outboxEvent.count({ where: { status: 'PENDING' } })).toBe(1);
     } finally {
-      await rawRabbit.unpause();
+      const started = await rabbitContainer.exec(['rabbitmqctl', 'start_app']);
+      expect(started.exitCode).toBe(0);
     }
-    expect(await prisma.outboxEvent.count({ where: { status: 'PENDING' } })).toBe(1);
 
     await eventually(() => rabbit.isReachable(), 30_000);
     await eventually(() => notificationTypes(bookingId).then((types) => types.length === 1));
@@ -161,6 +164,7 @@ messagingDescribe('RabbitMQ transactional outbox integration', () => {
     const original = await prisma.outboxEvent.findFirstOrThrow({
       where: { eventType: 'booking.created' },
     });
+    const duplicatesBefore = metrics.snapshot().consumer_duplicates;
     await publishEnvelope({
       eventId: original.id,
       eventType: 'booking.created',
@@ -170,7 +174,7 @@ messagingDescribe('RabbitMQ transactional outbox integration', () => {
       correlationId: original.id,
       payload: original.payload,
     });
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await eventually(() => metrics.snapshot().consumer_duplicates === duplicatesBefore + 1);
     expect(await prisma.notificationLog.count({ where: { eventId: original.id } })).toBe(1);
   });
 

@@ -531,3 +531,54 @@ delivery/retry/DLQ остаются ответственностью messaging i
 ### Следующий этап
 
 Этап 9 — расширение полного набора тестов (`llm/09-testing.md`).
+
+## Этап 9. Полный набор тестов
+
+- Дата: 2026-08-30
+- Роль агента: senior SDET/backend engineer
+- Промпт этапа: [`llm/09-testing.md`](../llm/09-testing.md)
+
+### Выполнено
+
+- Создана [`docs/test-strategy.md`](test-strategy.md): пирамида, test data policy, быстрый и
+  полный режимы, coverage policy, измеренное время и traceability всех acceptance criteria.
+- Расширены unit tests hashing/token validation и стабильного error mapping. Закреплены
+  существующие проверки генерации слотов, range, прошлого времени, UTC и DST boundaries.
+- PostgreSQL tests дополнены проверкой примененных миграций, constraints, стабильных OpenAPI error
+  codes и rollback create/cancel/reschedule при отказе outbox.
+- Три конкурентных сценария (create/create, reschedule/reschedule, create/reschedule) вынесены в
+  воспроизводимый контейнерный runner и успешно повторены 10 раз.
+- RabbitMQ recovery test переведен с недетерминированного `pause` на наблюдаемый
+  `rabbitmqctl stop_app/start_app`; duplicate delivery ожидает счетчик consumer, без fixed sleep.
+- Настроены Playwright Chromium E2E для guest booking/cancellation, owner
+  availability/reschedule и conflict UI. Добавлены точечные coverage thresholds критических
+  domain/application modules.
+
+### Проверки и результаты
+
+- Root OpenAPI lint: 14 operationIds, 28 schemas, ошибок нет.
+- Frontend lint/typecheck: пройдено; Vitest 31/31; build пройден; Playwright Chromium 3/3.
+- Backend lint/typecheck: пройдено; fast 47/47; coverage thresholds пройдены.
+- Чистый PostgreSQL integration: 17/17; полный backend clean suite: 64/64 плюс RabbitMQ 2/2.
+- Concurrency: 10/10 повторов каждого из трех сценариев (30 успешных запусков).
+- `--detectOpenHandles` не сообщил открытых handles; Testcontainers остановлены после suites.
+
+### Найденный и исправленный дефект теста
+
+RabbitMQ outage моделировался через Docker `pause`, который не гарантировал разрыв уже открытого
+AMQP-соединения. Событие успевало получить `PUBLISHED`, и recovery test был race-prone. Причина
+устранена через штатный stop/start RabbitMQ application с ожиданием `isReachable`; retries теста
+не добавлялись.
+
+### Остаточные риски
+
+- Нет отдельной конкурентной HTTP-проверки создания пересекающейся availability; DB constraint
+  проверен напрямую.
+- Performance p95, полноценный rate-limit audit, Firefox/WebKit и screen reader остаются
+  специализированными/manual gates.
+- Thin browser E2E использует контрактный fixture; полный browser + backend + PostgreSQL smoke
+  целесообразно добавить после Compose на этапе 10.
+
+### Следующий этап
+
+Этап 10 — Docker и эксплуатация ([`llm/10-docker-operations.md`](../llm/10-docker-operations.md)).

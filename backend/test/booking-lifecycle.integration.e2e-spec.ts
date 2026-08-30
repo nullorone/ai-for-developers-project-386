@@ -230,6 +230,38 @@ databaseDescribe('PostgreSQL API: booking lifecycle and concurrency', () => {
     }
   });
 
+  it('rolls back create and cancellation when their outbox insertion fails', async () => {
+    await installFailingOutboxTrigger('booking.created');
+    try {
+      await request(server)
+        .post('/api/v1/calendars/demo/bookings')
+        .send(bookingBody('2026-09-02T10:00:00Z'))
+        .expect(500);
+      expect(await prisma.booking.count()).toBe(0);
+      expect(await prisma.slotReservation.count()).toBe(0);
+      expect(await prisma.outboxEvent.count()).toBe(0);
+    } finally {
+      await removeFailingOutboxTrigger();
+    }
+
+    const created = await create('2026-09-02T10:00:00Z');
+    await installFailingOutboxTrigger('booking.cancelled');
+    try {
+      await request(server)
+        .post(`/api/v1/bookings/${created.id}/cancellation`)
+        .set('X-Booking-Token', created.managementToken)
+        .expect(500);
+      expect(await prisma.booking.findUnique({ where: { id: created.id } })).toMatchObject({
+        status: 'CONFIRMED',
+        cancelledAt: null,
+      });
+      expect(await activeStarts(created.id)).toEqual(['2026-09-02T10:00:00.000Z']);
+      expect(await prisma.outboxEvent.count({ where: { eventType: 'booking.cancelled' } })).toBe(0);
+    } finally {
+      await removeFailingOutboxTrigger();
+    }
+  });
+
   async function create(startsAt: string, key?: string): Promise<CreatedBooking> {
     let pending = request(server).post('/api/v1/calendars/demo/bookings');
     if (key) pending = pending.set('Idempotency-Key', key);
@@ -255,5 +287,27 @@ databaseDescribe('PostgreSQL API: booking lifecycle and concurrency', () => {
       select: { startsAt: true },
     });
     return reservations.map((item) => item.startsAt.toISOString()).sort();
+  }
+
+  async function installFailingOutboxTrigger(eventType: string): Promise<void> {
+    await prisma.$executeRawUnsafe(`
+      CREATE OR REPLACE FUNCTION fail_selected_outbox() RETURNS trigger AS $$
+      BEGIN
+        IF NEW.event_type = '${eventType}' THEN RAISE EXCEPTION 'forced outbox failure'; END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE TRIGGER fail_selected_outbox_trigger BEFORE INSERT ON outbox_events
+      FOR EACH ROW EXECUTE FUNCTION fail_selected_outbox()
+    `);
+  }
+
+  async function removeFailingOutboxTrigger(): Promise<void> {
+    await prisma.$executeRawUnsafe(
+      'DROP TRIGGER IF EXISTS fail_selected_outbox_trigger ON outbox_events',
+    );
+    await prisma.$executeRawUnsafe('DROP FUNCTION IF EXISTS fail_selected_outbox()');
   }
 });
