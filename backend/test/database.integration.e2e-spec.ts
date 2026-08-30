@@ -222,4 +222,66 @@ databaseDescribe('PostgreSQL integration: availability and slot queries', () => 
       /reservation_slot_query_idx|reservation_one_active_slot/,
     );
   });
+
+  it('применяет все миграции и защищает временные инварианты constraints уровня БД', async () => {
+    const migrations = await prisma.$queryRaw<Array<{ migration_name: string }>>`
+      SELECT migration_name FROM "_prisma_migrations"
+      WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL
+      ORDER BY migration_name`;
+    expect(migrations.map((item) => item.migration_name)).toEqual([
+      '20260827090000_backend_core',
+      '20260827140000_booking_lifecycle',
+    ]);
+
+    await expect(
+      prisma.availabilityWindow.create({
+        data: {
+          calendarId: DEMO_CALENDAR_ID,
+          startsAt: date('2026-09-02T09:15:00Z'),
+          endsAt: date('2026-09-02T10:00:00Z'),
+        },
+      }),
+    ).rejects.toThrow();
+    await expect(
+      prisma.booking.create({
+        data: {
+          calendarId: DEMO_CALENDAR_ID,
+          startsAt: date('2026-09-02T09:00:00Z'),
+          endsAt: date('2026-09-02T10:00:00Z'),
+          guestName: 'Invalid duration',
+          guestEmail: 'invalid@example.com',
+          managementTokenHash: 'c'.repeat(64),
+        },
+      }),
+    ).rejects.toThrow();
+  });
+
+  it('возвращает стабильные OpenAPI error codes для not found и validation paths', async () => {
+    const server = app.getHttpServer() as App;
+    await request(server)
+      .get('/api/v1/calendars/missing')
+      .expect(404)
+      .expect(({ body, headers }) => {
+        expect(headers['content-type']).toContain('application/problem+json');
+        expect(body).toMatchObject({ code: 'CALENDAR_NOT_FOUND' });
+      });
+    await request(server)
+      .get('/api/v1/calendars/demo/slots')
+      .query({ from: '2026-09-02T09:00:00+03:00', to: '2026-09-03T09:00:00Z' })
+      .expect(422)
+      .expect(({ body }) => expect(body).toMatchObject({ code: 'VALIDATION_ERROR' }));
+    await request(server)
+      .post('/api/v1/calendars/demo/bookings')
+      .send({
+        startsAt: '2026-09-02T09:15:00Z',
+        guestName: 'Guest',
+        guestEmail: 'guest@example.com',
+      })
+      .expect(422)
+      .expect(({ body }) => expect(body).toMatchObject({ code: 'VALIDATION_ERROR' }));
+    await request(server)
+      .delete('/api/v1/owner/availability/8b6b8a2a-4a3e-4a63-9d0f-2f1a5c4b7e10')
+      .expect(404)
+      .expect(({ body }) => expect(body).toMatchObject({ code: 'AVAILABILITY_WINDOW_NOT_FOUND' }));
+  });
 });

@@ -26,8 +26,12 @@
     "pretest": "npm run prisma:generate",
     "test": "jest --runInBand",
     "test:integration": "RUN_DATABASE_TESTS=true jest --runInBand --testPathPattern=integration.e2e-spec.ts",
+    "test:integration:container": "node test/run-postgres-suite.mjs integration",
+    "test:concurrency": "RUN_DATABASE_TESTS=true jest --runInBand --testPathPattern=booking-lifecycle.integration.e2e-spec.ts --testNamePattern=concurrent|shared target|races",
+    "test:concurrency:container": "node test/run-postgres-suite.mjs concurrency",
     "test:frontend-integration": "RUN_DATABASE_TESTS=true jest --runInBand --testPathPattern=frontend-backend.integration.e2e-spec.ts",
     "test:messaging": "RUN_MESSAGING_TESTS=true jest --runInBand --testPathPattern=messaging.integration.e2e-spec.ts",
+    "test:full": "node test/run-postgres-suite.mjs full && npm run test:messaging",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage --runInBand"
   },
