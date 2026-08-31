@@ -1,0 +1,15 @@
+**/.env
+**/.env.*
+!**/.env.example
+.git
+.github
+backend
+docs
+llm
+node_modules
+frontend/coverage
+frontend/dist
+frontend/node_modules
+frontend/playwright-report
+frontend/test-results
+**/*.log

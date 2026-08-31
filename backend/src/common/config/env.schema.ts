@@ -42,6 +42,12 @@ export const envSchema = z.object({
 
   LOG_LEVEL: z.enum(['error', 'warn', 'log', 'debug', 'verbose']).default('log'),
 
+  /** Hard upper bound before DTO validation; protects memory from oversized JSON bodies. */
+  HTTP_BODY_LIMIT: z
+    .string()
+    .regex(/^\d+(?:kb|mb)$/i)
+    .default('64kb'),
+
   /** Messaging можно отключить для unit/API-тестов и окружений без постоянного worker. */
   MESSAGING_ENABLED: z
     .enum(['true', 'false'])

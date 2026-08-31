@@ -5,6 +5,7 @@
 .env
 .env.*
 !.env.example
+!.env.compose.example
 
 # Dependencies (contract tooling in the root, frontend/ and backend/ — свои проекты)
 node_modules/

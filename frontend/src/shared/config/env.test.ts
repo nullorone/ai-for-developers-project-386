@@ -13,6 +13,10 @@ describe('readAppConfig', () => {
     });
   });
 
+  it('поддерживает runtime same-origin path контейнера', () => {
+    expect(readAppConfig({ VITE_API_BASE_URL: '/api/v1/' })).toEqual({ apiBaseUrl: '/api/v1' });
+  });
+
   it('падает на невалидном URL, а не молча использует его', () => {
     expect(() => readAppConfig({ VITE_API_BASE_URL: 'not-a-url' })).toThrow(
       /Некорректные переменные окружения/,

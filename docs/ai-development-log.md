@@ -582,3 +582,57 @@ AMQP-соединения. Событие успевало получить `PUB
 ### Следующий этап
 
 Этап 10 — Docker и эксплуатация ([`llm/10-docker-operations.md`](../llm/10-docker-operations.md)).
+
+## Этап 10. Docker и эксплуатационная готовность
+
+- Дата: 2026-08-30
+- Роль агента: senior platform-minded engineer
+- Промпт этапа: [`llm/10-docker-operations.md`](../llm/10-docker-operations.md)
+
+### Реализация
+
+- Добавлены раздельные multi-stage Dockerfiles. Frontend собирается reproducible `npm ci` и
+  запускается nginx-unprivileged с SPA fallback, cache/security headers и runtime `/config.js`.
+  Backend runtime содержит production dependencies, compiled output и generated Prisma engine;
+  Prisma CLI/TypeScript остаются только в operations target. Оба runtime non-root.
+- Compose поднимает frontend/backend/PostgreSQL 16.10/RabbitMQ 3.13.7, named volumes и разделенные
+  edge/internal data networks. Наружу на loopback опубликованы frontend и local-only management UI;
+  PostgreSQL/AMQP остаются внутренними. Health dependency conditions дополняют application retries.
+- `migrate deploy` и идемпотентный seed выполняются one-shot контейнерами без reset/schema push.
+  BuildKit secrets опционально передают private npm config/CA, не сохраняя их в layers. Lockfile
+  `resolved` URLs нормализованы с частного Artifactory на публичный npm registry.
+- Backend получил one-line JSON logger с redaction, безопасный access log/request id, graceful
+  shutdown hooks, 64 KiB body limit и rate limiting всех фактически публичных MVP endpoints.
+  Повторяющийся zero-backlog metric теперь пишется только при изменении.
+- Добавлена [`operations.md`](operations.md) с запуском, frontend build/runtime URL, health/logs,
+  migrations, backup/restore assumptions, Rabbit/outbox/DLQ recovery и troubleshooting.
+
+### Проверки и обнаруженные дефекты
+
+- Clean `docker compose build --no-cache` успешно собрал четыре targets. Docker build обнаружил и
+  исправил скрытую зависимость frontend typecheck от корневого `node_modules`: `@types/node` теперь
+  прямой frontend dev dependency. Минимальный Node обновлен до 20.19, image pinned на 20.19.5.
+- Чистый Compose создал volumes, применил обе migrations, seed и вывел все long-running services в
+  healthy. Исправлены выявленные smoke дефекты operations `ts-node` (не хватало tsconfig) и backend
+  entrypoint (`dist/src/main.js`, а не несуществующий `dist/main.js`).
+- Реальный nginx→backend flow прошел create/cancel и create/reschedule. PostgreSQL показал четыре
+  `PUBLISHED` outbox events и NotificationLog для created/cancelled/rescheduled.
+- При остановленном RabbitMQ новый booking сохранился с `PENDING`; event пережил restart backend,
+  после запуска RabbitMQ стал `PUBLISHED` и создал ровно один NotificationLog.
+- Runtime audit: UID backend/frontend `1000/101`; `.env`, source, tests, npm secrets отсутствуют;
+  Prisma CLI, TypeScript, Nest CLI/Jest/ESLint/Testcontainers отсутствуют. Размеры: backend
+  90,681,018 bytes, frontend 21,977,821 bytes.
+- Frontend lint/typecheck/build и 32 Vitest, backend lint/typecheck/build и 47 Jest, root OpenAPI
+  lint прошли. Docker Scout v1.18.3 потребовал login, поэтому CVE results не получены и scan остается
+  обязательным release gate в CI.
+
+### Ограничения
+
+- Compose остается single-host reference без HA. Owner API по MVP публичен; limiter не заменяет auth.
+- Management UI опубликована только на `127.0.0.1`; production override обязан убрать этот port.
+- `undici@8` из dev-only Testcontainers tree требует Node 22.19; он не входит в Node 20 runtime
+  image, но full messaging/integration tests следует продолжать запускать на Node 22 CI.
+
+### Следующий этап
+
+Этап 11 — CI/CD ([`llm/11-ci-cd.md`](../llm/11-ci-cd.md)).

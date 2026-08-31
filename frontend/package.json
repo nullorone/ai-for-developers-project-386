@@ -6,7 +6,7 @@
   "license": "MIT",
   "type": "module",
   "engines": {
-    "node": ">=20.6.0"
+    "node": ">=20.19.0"
   },
   "scripts": {
     "api:generate": "openapi-typescript ../openapi.yaml --output src/shared/api/generated/schema.d.ts",
@@ -45,6 +45,7 @@
     "@testing-library/jest-dom": "^6.6.3",
     "@testing-library/react": "^16.1.0",
     "@testing-library/user-event": "^14.5.2",
+    "@types/node": "^20.19.43",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",

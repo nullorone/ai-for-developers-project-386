@@ -7,7 +7,7 @@ lockfile, скрипты и тесты. Реализация обязана со
 
 ## Требования
 
-- Node.js `>=20.6.0` (проверено на 20.6.1), npm 9+.
+- Node.js `>=20.19.0`; container build закреплен на Node 20.19.5, npm 9+.
 - PostgreSQL 16+. HTTP-процесс поднимается и без базы:
   соединение Prisma ленивое, `/health/live` всегда отвечает `200`,
   а `/health` и `/health/ready` честно возвращают `503`, пока база недоступна.
@@ -31,7 +31,7 @@ curl -s http://localhost:3000/api/v1/health/live
 | `npm run prisma:generate`                | Генерирует Prisma Client (в `node_modules`)                             |
 | `npm run prisma:migrate` / `prisma:seed` | Применяет миграции / идемпотентно создает календарь `demo`              |
 | `npm run build`                          | `nest build` → `dist/`                                                  |
-| `npm start`                              | `node dist/main.js` (требует предварительный `build`)                   |
+| `npm start`                              | `node dist/src/main.js` (требует предварительный `build`)               |
 | `npm run start:dev`                      | Watch-режим                                                             |
 | `npm run typecheck`                      | `tsc --noEmit`                                                          |
 | `npm run lint`                           | ESLint с типизированными правилами, `--max-warnings=0`                  |
