@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 
+import { TokenRateLimitGuard } from '../bookings/token-rate-limit.guard';
 import { CalendarRepository } from './calendar.repository';
 import { CalendarsController } from './calendars.controller';
 import { CalendarsService } from './calendars.service';
@@ -12,7 +13,7 @@ import { CalendarsService } from './calendars.service';
  */
 @Module({
   controllers: [CalendarsController],
-  providers: [CalendarRepository, CalendarsService],
+  providers: [CalendarRepository, CalendarsService, TokenRateLimitGuard],
   exports: [CalendarRepository],
 })
 export class CalendarsModule {}

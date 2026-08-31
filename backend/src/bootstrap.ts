@@ -1,9 +1,10 @@
 import type { INestApplication } from '@nestjs/common';
-import type { Express } from 'express';
+import { json, urlencoded, type Express } from 'express';
 
 import { parseCorsOrigins, type Env } from './common/config/env.schema';
 import { ContractExceptionFilter } from './common/filters/contract-exception.filter';
 import { requestIdMiddleware } from './common/middleware/request-id.middleware';
+import { requestLogMiddleware } from './common/middleware/request-log.middleware';
 import { createValidationPipe } from './common/validation/validation.pipe';
 
 /**
@@ -12,11 +13,16 @@ import { createValidationPipe } from './common/validation/validation.pipe';
  */
 export function configureApp(app: INestApplication, env: Env): INestApplication {
   // Лишняя информация о стеке наружу не уходит (правило N-10).
-  (app.getHttpAdapter().getInstance() as Express).disable('x-powered-by');
+  const express = app.getHttpAdapter().getInstance() as Express;
+  express.disable('x-powered-by');
+  express.set('trust proxy', 1);
 
   // Контракт объявляет сервер как http://localhost:3000/api/v1.
   app.setGlobalPrefix(env.API_PREFIX);
+  app.use(json({ limit: env.HTTP_BODY_LIMIT }));
+  app.use(urlencoded({ extended: false, limit: env.HTTP_BODY_LIMIT }));
   app.use(requestIdMiddleware);
+  app.use(requestLogMiddleware);
   app.useGlobalPipes(createValidationPipe());
   app.useGlobalFilters(new ContractExceptionFilter());
   app.enableCors({

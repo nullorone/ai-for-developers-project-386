@@ -5,7 +5,7 @@
   "description": "Backend приложения «Запись на звонок» (NestJS). Независимый проект; контракт — корневой openapi.yaml.",
   "license": "MIT",
   "engines": {
-    "node": ">=20.6.0"
+    "node": ">=20.19.0"
   },
   "scripts": {
     "prisma:generate": "prisma generate",
@@ -14,7 +14,7 @@
     "postinstall": "prisma generate",
     "prebuild": "npm run prisma:generate",
     "build": "nest build",
-    "start": "node dist/main.js",
+    "start": "node dist/src/main.js",
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",
     "pretypecheck": "npm run prisma:generate",

@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 
+import { TokenRateLimitGuard } from '../bookings/token-rate-limit.guard';
 import { CalendarsModule } from '../calendars/calendars.module';
 import { SlotGeneratorService } from './slot-generator.service';
 import { SlotsController } from './slots.controller';
@@ -15,7 +16,7 @@ import { SlotsService } from './slots.service';
 @Module({
   imports: [CalendarsModule],
   controllers: [SlotsController],
-  providers: [SlotsRepository, SlotGeneratorService, SlotsService],
+  providers: [SlotsRepository, SlotGeneratorService, SlotsService, TokenRateLimitGuard],
   exports: [SlotsService],
 })
 export class SlotsModule {}

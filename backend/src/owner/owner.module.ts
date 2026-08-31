@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 
+import { TokenRateLimitGuard } from '../bookings/token-rate-limit.guard';
 import { CalendarsModule } from '../calendars/calendars.module';
 import { BookingsModule } from '../bookings/bookings.module';
 import { SlotsModule } from '../slots/slots.module';
@@ -16,6 +17,6 @@ import { OwnerService } from './owner.service';
 @Module({
   imports: [CalendarsModule, SlotsModule, BookingsModule],
   controllers: [OwnerController],
-  providers: [OwnerRepository, OwnerService],
+  providers: [OwnerRepository, OwnerService, TokenRateLimitGuard],
 })
 export class OwnerModule {}

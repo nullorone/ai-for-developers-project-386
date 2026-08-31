@@ -6,7 +6,7 @@
   "license": "MIT",
   "type": "module",
   "engines": {
-    "node": ">=20.6.0"
+    "node": ">=20.19.0"
   },
   "scripts": {
     "lint:openapi": "spectral lint openapi.yaml --ruleset .spectral.yaml --fail-severity warn --display-only-failures",

@@ -1,0 +1,160 @@
+name: booking-call
+
+services:
+  postgres:
+    image: postgres:16.10-alpine3.22
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?copy .env.compose.example to .env}
+      POSTGRES_USER: ${POSTGRES_USER:?copy .env.compose.example to .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?copy .env.compose.example to .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    stop_grace_period: 30s
+
+  rabbitmq:
+    image: rabbitmq:3.13.7-management-alpine
+    hostname: rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:?copy .env.compose.example to .env}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:?copy .env.compose.example to .env}
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    ports:
+      # Local troubleshooting UI only. AMQP remains private to the data network.
+      - "127.0.0.1:15672:15672"
+    networks:
+      - data
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    stop_grace_period: 30s
+
+  migrate:
+    build:
+      context: backend
+      target: operations
+      args:
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org/}
+      secrets:
+        - npm_ca
+        - npmrc
+    restart: "no"
+    environment: &backend-environment
+      NODE_ENV: production
+      PORT: 3000
+      API_PREFIX: api/v1
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+      IDEMPOTENCY_ENCRYPTION_KEY: ${IDEMPOTENCY_ENCRYPTION_KEY:?copy .env.compose.example to .env}
+      CORS_ORIGINS: http://localhost:8080
+      LOG_LEVEL: log
+      MESSAGING_ENABLED: "true"
+      RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER}:${RABBITMQ_DEFAULT_PASS}@rabbitmq:5672
+    command: ["run", "prisma:migrate", "--silent"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - data
+
+  seed:
+    build:
+      context: backend
+      target: operations
+      args:
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org/}
+      secrets:
+        - npm_ca
+        - npmrc
+    restart: "no"
+    environment: *backend-environment
+    command: ["run", "prisma:seed", "--silent"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - data
+
+  backend:
+    build:
+      context: backend
+      target: runtime
+      args:
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org/}
+      secrets:
+        - npm_ca
+        - npmrc
+    init: true
+    restart: unless-stopped
+    environment: *backend-environment
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - edge
+      - data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/api/v1/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 15s
+    stop_grace_period: 30s
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      target: runtime
+      args:
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org/}
+      secrets:
+        - npm_ca
+        - npmrc
+    init: true
+    restart: unless-stopped
+    environment:
+      API_BASE_URL: /api/v1
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - edge
+    stop_grace_period: 10s
+
+volumes:
+  postgres-data:
+  rabbitmq-data:
+
+networks:
+  edge:
+  data:
+    internal: true
+
+secrets:
+  npm_ca:
+    file: ${NPM_CA_FILE:-./docker/empty-build-secret}
+  npmrc:
+    file: ${NPM_CONFIG_FILE:-./docker/empty-build-secret}

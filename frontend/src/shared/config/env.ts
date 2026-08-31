@@ -7,12 +7,26 @@ import { z } from 'zod';
 export const DEFAULT_API_BASE_URL = 'http://localhost:3000/api/v1';
 
 const envSchema = z.object({
-  VITE_API_BASE_URL: z.string().url().default(DEFAULT_API_BASE_URL),
+  VITE_API_BASE_URL: z
+    .string()
+    .refine(
+      (value) =>
+        (/^https?:\/\//.test(value) && z.string().url().safeParse(value).success) ||
+        (/^\/(?!\/)/.test(value) && !value.includes('\\')),
+      'VITE_API_BASE_URL must be an HTTP(S) URL or an absolute same-origin path',
+    )
+    .default(DEFAULT_API_BASE_URL),
 });
 
 export type AppConfig = {
   readonly apiBaseUrl: string;
 };
+
+declare global {
+  interface Window {
+    __APP_CONFIG__?: { apiBaseUrl?: unknown };
+  }
+}
 
 export function readAppConfig(source: Record<string, unknown>): AppConfig {
   const parsed = envSchema.safeParse(source);
@@ -28,4 +42,10 @@ export function readAppConfig(source: Record<string, unknown>): AppConfig {
   return { apiBaseUrl: parsed.data.VITE_API_BASE_URL.replace(/\/+$/, '') };
 }
 
-export const appConfig = readAppConfig(import.meta.env as unknown as Record<string, unknown>);
+const runtimeApiBaseUrl =
+  typeof window === 'undefined' ? undefined : window.__APP_CONFIG__?.apiBaseUrl;
+
+export const appConfig = readAppConfig({
+  ...(import.meta.env as unknown as Record<string, unknown>),
+  ...(runtimeApiBaseUrl === undefined ? {} : { VITE_API_BASE_URL: runtimeApiBaseUrl }),
+});

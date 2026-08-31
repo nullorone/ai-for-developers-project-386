@@ -9,14 +9,17 @@ import {
   ParseUUIDPipe,
   Post,
   Res,
+  UseGuards,
 } from '@nestjs/common';
 import type { Response } from 'express';
 
+import { TokenRateLimitGuard } from '../bookings/token-rate-limit.guard';
 import { AvailabilityService } from './availability.service';
 import type { AvailabilityWindowDto, AvailabilityWindowListDto } from './availability.types';
 import { CreateAvailabilityDto } from './create-availability.dto';
 
 @Controller('owner/availability')
+@UseGuards(TokenRateLimitGuard)
 export class AvailabilityController {
   constructor(private readonly availability: AvailabilityService) {}
 

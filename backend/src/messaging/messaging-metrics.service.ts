@@ -6,6 +6,7 @@ export type MessagingMetric =
 @Injectable()
 export class MessagingMetricsService {
   private readonly logger = new Logger(MessagingMetricsService.name);
+  private lastBacklog: number | null = null;
   private readonly counters: Record<MessagingMetric, number> = {
     outbox_publish_failures: 0,
     consumer_retries: 0,
@@ -21,6 +22,8 @@ export class MessagingMetricsService {
   }
 
   backlog(value: number): void {
+    if (value === this.lastBacklog) return;
+    this.lastBacklog = value;
     this.logger.log(JSON.stringify({ kind: 'metric', metric: 'outbox_backlog', value }));
   }
 

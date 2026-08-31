@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 
+import { TokenRateLimitGuard } from '../bookings/token-rate-limit.guard';
 import { CalendarsModule } from '../calendars/calendars.module';
 import { AvailabilityController } from './availability.controller';
 import { AvailabilityRepository } from './availability.repository';
@@ -14,7 +15,7 @@ import { AvailabilityService } from './availability.service';
 @Module({
   imports: [CalendarsModule],
   controllers: [AvailabilityController],
-  providers: [AvailabilityRepository, AvailabilityService],
+  providers: [AvailabilityRepository, AvailabilityService, TokenRateLimitGuard],
   exports: [AvailabilityRepository],
 })
 export class AvailabilityModule {}

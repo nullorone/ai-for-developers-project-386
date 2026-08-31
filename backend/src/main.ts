@@ -7,13 +7,17 @@ import { AppModule } from './app.module';
 import { configureApp } from './bootstrap';
 import { validateEnv } from './common/config/env.schema';
 import { resolveLogLevels } from './common/config/logging';
+import { JsonLogger } from './common/config/json-logger';
 
 async function bootstrap(): Promise<void> {
   // Конфигурация проверяется до создания приложения: некорректное окружение
   // должно ронять процесс сразу и с понятным сообщением.
   const env = validateEnv(process.env);
 
-  const app = await NestFactory.create(AppModule, { logger: resolveLogLevels(env.LOG_LEVEL) });
+  const app = await NestFactory.create(AppModule, {
+    bodyParser: false,
+    logger: new JsonLogger(resolveLogLevels(env.LOG_LEVEL)),
+  });
 
   configureApp(app, env);
 

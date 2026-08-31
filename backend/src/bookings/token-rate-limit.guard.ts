@@ -17,11 +17,18 @@ interface Bucket {
 @Injectable()
 export class TokenRateLimitGuard implements CanActivate {
   private readonly buckets = new Map<string, Bucket>();
+  private requestsSinceCleanup = 0;
 
   canActivate(context: ExecutionContext): boolean {
     const request = context.switchToHttp().getRequest<Request>();
     const response = context.switchToHttp().getResponse<Response>();
     const now = Date.now();
+    if (++this.requestsSinceCleanup >= 1000) {
+      this.requestsSinceCleanup = 0;
+      for (const [bucketKey, value] of this.buckets) {
+        if (value.resetsAt <= now) this.buckets.delete(bucketKey);
+      }
+    }
     const safeRoute = request.path
       .replace(UUID_IN_PATH, ':bookingId')
       .replace(CALENDAR_SLUG_IN_PATH, '/calendars/:slug/bookings');

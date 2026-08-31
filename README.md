@@ -13,10 +13,9 @@
 
 ## Статус
 
-Этап 8 из 13: frontend подключен к реальному NestJS API; guest и owner flow работают через
-PostgreSQL. Backend реализует транзакционный lifecycle, RabbitMQ publisher/consumer, retry и DLQ.
-Prism и stateful mock используются только изолированно и в тестах. Docker Compose появится на
-этапе 10 — см. [`llm/README.md`](llm/README.md).
+Этап 10 из 13: полное окружение контейнеризировано; guest и owner flow работают через PostgreSQL,
+а transactional outbox доставляет события через RabbitMQ с retry/DLQ. Приложения запускаются
+non-root, имеют healthchecks, structured logs и безопасный migration/seed flow.
 
 ## Структура репозитория
 
@@ -38,7 +37,7 @@ Prism и stateful mock используются только изолирова�
 
 ## Требования к окружению
 
-- Node.js `>=20.6.0`; проверено на **Node 20.6.1 / npm 9.8.1**.
+- Node.js `>=20.19.0`; container build закреплен на **Node 20.19.5**.
 - npm 9+ (по одному lockfile на каждый проект).
 - PostgreSQL 16+ нужен для доменных endpoints; `/health/live` доступен и без базы.
 - Docker не требуется: локальный запуск полностью работает без него.
@@ -46,6 +45,21 @@ Prism и stateful mock используются только изолирова�
 ## Локальный запуск без Docker
 
 Три независимых установки зависимостей — по одной на корень, frontend и backend.
+
+## Запуск через Docker Compose
+
+```bash
+cp .env.compose.example .env
+docker compose up --build
+```
+
+Приложение будет доступно на <http://localhost:8080>, readiness —
+<http://localhost:8080/api/v1/health/ready>. Compose сам безопасно применяет committed migrations
+и идемпотентный seed отдельными one-shot контейнерами. PostgreSQL/AMQP наружу не публикуются;
+RabbitMQ management UI доступна только локально на <http://localhost:15672>.
+
+Эксплуатационные процедуры, backup assumptions, runtime API URL и troubleshooting описаны в
+[`docs/operations.md`](docs/operations.md).
 
 ### 1. Контракт (опционально, но полезно)
 
@@ -146,4 +160,5 @@ cd frontend && npm run api:generate   # → src/shared/api/generated/schema.d.ts
 - [ADR 0002. Решения API-контракта](docs/adr/0002-api-contract-decisions.md)
 - [ADR 0003. Транзакции и идемпотентность](docs/adr/0003-booking-transaction-and-idempotency.md)
 - [Журнал LLM-разработки](docs/ai-development-log.md)
+- [Docker и эксплуатация](docs/operations.md)
 - [Frontend README](frontend/README.md) · [Backend README](backend/README.md)
